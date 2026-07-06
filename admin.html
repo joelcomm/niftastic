@@ -149,9 +149,24 @@ function setMsg(text, ok) {
 
 function initMap() {
   map = L.map("map").setView([40.758, -73.9855], 13); // Times Square default, per the proposal
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+
+  const streets = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap contributors", maxZoom: 19,
-  }).addTo(map);
+  });
+  const imagery = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    attribution: "Imagery &copy; Esri", maxZoom: 19,
+  });
+  const labels = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}", {
+    maxZoom: 19,
+  });
+  const satellite = L.layerGroup([imagery, labels]);
+
+  satellite.addTo(map); // default: buildings visible
+  L.control.layers({ "Satellite": satellite, "Streets": streets }, null,
+    { position: "topright", collapsed: false }).addTo(map);
+
   dropLayer = L.layerGroup().addTo(map);
   map.on("click", e => {
     document.getElementById("lat").value = e.latlng.lat.toFixed(6);
