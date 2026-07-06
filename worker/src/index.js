@@ -261,33 +261,53 @@ async function handleAdmin(request, url, env) {
     }
     const {
       name, template_id, collection_name, image, lat, lng,
-      captureRadius, quantity, rarity, oncePerPlayer,
+      captureRadius, quantity, rarity, oncePerPlayer, scatter,
     } = body || {};
     if (!name || !template_id) return json({ error: "name and template_id required" }, 400);
     if (typeof lat !== "number" || typeof lng !== "number") {
       return json({ error: "lat and lng are required numbers" }, 400);
     }
 
-    const drop = {
+    const qty = Math.max(1, Number(quantity) || 1);
+    const scatterRadius = Math.max(0, Number(scatter) || 0);
+    const groupId = crypto.randomUUID();
+
+    const makeDrop = (dLat, dLng, remaining) => ({
       id: crypto.randomUUID(),
+      group: groupId,
       name,
       template_id: String(template_id),
       collection_name: collection_name || null,
       image: image || null,
-      lat,
-      lng,
+      lat: dLat,
+      lng: dLng,
       captureRadius: Math.max(10, Number(captureRadius) || 50),
-      remaining: Math.max(1, Number(quantity) || 1),
+      remaining,
       captured: 0,
       rarity: rarity || null,
       oncePerPlayer: Boolean(oncePerPlayer),
       created: new Date().toISOString(),
-    };
+    });
+
+    let created;
+    if (scatterRadius > 0 && qty > 1) {
+      // Split into individual NFTs, each at a uniformly random point
+      // within scatterRadius meters of the clicked location.
+      created = Array.from({ length: qty }, () => {
+        const r = scatterRadius * Math.sqrt(Math.random());
+        const theta = Math.random() * 2 * Math.PI;
+        const newLat = lat + (r * Math.cos(theta)) / 111320;
+        const newLng = lng + (r * Math.sin(theta)) / (111320 * Math.cos((lat * Math.PI) / 180));
+        return makeDrop(newLat, newLng, 1);
+      });
+    } else {
+      created = [makeDrop(lat, lng, qty)];
+    }
 
     const drops = await loadDrops(env);
-    drops.push(drop);
+    drops.push(...created);
     await saveDrops(env, drops);
-    return json({ ok: true, drop }, 201);
+    return json({ ok: true, drops: created }, 201);
   }
 
   if (request.method === "DELETE" && parts.length === 3) {

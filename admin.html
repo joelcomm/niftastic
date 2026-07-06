@@ -100,6 +100,8 @@
       <div class="field"><label>Quantity</label><input id="quantity" type="number" value="10" min="1" /></div>
       <div class="field"><label>Capture radius (m)</label><input id="radius" type="number" value="50" min="10" /></div>
     </div>
+    <div class="field"><label>Scatter radius (m) — spread multiple copies randomly around the click</label>
+      <input id="scatter" type="number" value="75" min="0" /></div>
     <div class="field"><label>Rarity label (optional)</label><input id="rarity" placeholder="e.g. Rare" /></div>
     <div class="field"><label><input id="oncePerPlayer" type="checkbox" style="width:auto;margin-right:6px" />
       One per player (skip if wallet already owns this template)</label></div>
@@ -253,6 +255,7 @@ async function createDrop() {
     captureRadius: parseInt(document.getElementById("radius").value, 10),
     rarity: document.getElementById("rarity").value.trim() || null,
     oncePerPlayer: document.getElementById("oncePerPlayer").checked,
+    scatter: parseInt(document.getElementById("scatter").value, 10) || 0,
   };
   if (!payload.name || !payload.template_id) { setMsg("Name and template ID are required.", false); return; }
   try {
@@ -263,7 +266,10 @@ async function createDrop() {
     });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || "HTTP " + res.status);
-    setMsg("Drop placed: " + payload.name, true);
+    const n = (body.drops || []).length || 1;
+    setMsg(n > 1
+      ? `${n} × ${payload.name} scattered within ${payload.scatter} m.`
+      : "Drop placed: " + payload.name, true);
     refreshDrops();
   } catch (e) {
     setMsg("Create failed: " + e.message, false);
