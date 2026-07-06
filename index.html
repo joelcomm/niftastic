@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#0b0f1e" />
+<title>Niftastic — Hunt NFTs in the Real World</title>
+<link rel="manifest" href="manifest.json" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; overscroll-behavior: none; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0b0f1e; color: #eef1ff; overflow: hidden;
+  }
+  #root { height: 100%; }
+
+  .screen { height: 100%; display: flex; flex-direction: column; }
+
+  /* ---------- Login ---------- */
+  .login {
+    justify-content: center; align-items: center; text-align: center; padding: 32px; gap: 18px;
+    background: radial-gradient(ellipse at 50% 30%, #1c2450 0%, #0b0f1e 70%);
+  }
+  .logo { font-size: 44px; font-weight: 800; letter-spacing: -1px;
+    background: linear-gradient(90deg, #7de3ff, #b388ff, #ff8bd2);
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .tagline { color: #9aa3c7; font-size: 16px; max-width: 300px; line-height: 1.5; }
+  .btn {
+    border: none; border-radius: 14px; padding: 16px 28px; font-size: 17px; font-weight: 700;
+    color: #0b0f1e; background: linear-gradient(90deg, #7de3ff, #b388ff);
+    cursor: pointer; box-shadow: 0 6px 24px rgba(125, 227, 255, .35);
+  }
+  .btn:active { transform: scale(.97); }
+  .btn.secondary { background: #232a4d; color: #eef1ff; box-shadow: none; }
+  .hint { font-size: 13px; color: #6b7399; max-width: 280px; line-height: 1.5; }
+  .err { color: #ff8b8b; font-size: 14px; max-width: 300px; line-height: 1.4; }
+
+  /* ---------- Header / nav ---------- */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px;
+    background: rgba(11,15,30,.9); backdrop-filter: blur(8px); z-index: 5;
+  }
+  .header .brand { font-weight: 800; font-size: 18px;
+    background: linear-gradient(90deg, #7de3ff, #b388ff);
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .header .account { font-size: 13px; color: #9aa3c7; }
+  .tabs {
+    display: flex; background: rgba(11,15,30,.95); backdrop-filter: blur(8px);
+    padding-bottom: env(safe-area-inset-bottom, 0px); z-index: 5;
+  }
+  .tab { flex: 1; padding: 14px 0; text-align: center; font-size: 14px; font-weight: 600;
+    color: #6b7399; cursor: pointer; border-top: 2px solid transparent; }
+  .tab.active { color: #7de3ff; border-top-color: #7de3ff; }
+  .main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+  /* ---------- Hunt ---------- */
+  .hunt { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+  .radar-wrap { display: flex; justify-content: center; }
+  canvas.radar { border-radius: 50%; background: radial-gradient(circle, #101736 0%, #0b0f1e 100%);
+    box-shadow: 0 0 0 1px #232a4d, 0 0 40px rgba(125,227,255,.08) inset; }
+  .status-line { text-align: center; color: #9aa3c7; font-size: 13px; }
+  .drop-card {
+    display: flex; align-items: center; gap: 14px; background: #141a38;
+    border: 1px solid #232a4d; border-radius: 16px; padding: 12px;
+  }
+  .drop-card img { width: 64px; height: 64px; border-radius: 12px; object-fit: cover; background: #0b0f1e; }
+  .drop-card .noimg { width: 64px; height: 64px; border-radius: 12px; background: #232a4d;
+    display: flex; align-items: center; justify-content: center; font-size: 28px; }
+  .drop-info { flex: 1; min-width: 0; }
+  .drop-info .name { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .drop-info .meta { font-size: 12.5px; color: #9aa3c7; margin-top: 3px; }
+  .drop-info .inrange { color: #7dffb0; font-weight: 700; }
+  .capture-btn {
+    border: none; border-radius: 12px; padding: 10px 14px; font-weight: 700; font-size: 13px;
+    background: linear-gradient(90deg, #7dffb0, #7de3ff); color: #0b0f1e; cursor: pointer;
+  }
+  .capture-btn:disabled { background: #232a4d; color: #6b7399; }
+  .ar-fab {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 68px);
+    border: none; border-radius: 999px; padding: 16px 30px; font-size: 16px; font-weight: 800;
+    background: linear-gradient(90deg, #ff8bd2, #b388ff); color: #0b0f1e; cursor: pointer;
+    box-shadow: 0 8px 28px rgba(179,136,255,.45); z-index: 6;
+  }
+
+  /* ---------- AR ---------- */
+  .ar { position: fixed; inset: 0; background: #000; z-index: 20; }
+  .ar video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .ar-overlay { position: absolute; inset: 0; overflow: hidden; }
+  .ar-drop {
+    position: absolute; transform: translate(-50%, -50%); text-align: center;
+    transition: left .15s linear, top .2s ease; cursor: pointer;
+  }
+  .ar-drop img, .ar-drop .noimg {
+    border-radius: 16px; object-fit: cover; background: rgba(11,15,30,.5);
+    box-shadow: 0 0 24px rgba(125,227,255,.7); animation: bob 2.4s ease-in-out infinite;
+  }
+  .ar-drop .noimg { display: flex; align-items: center; justify-content: center; }
+  .ar-drop.inrange img, .ar-drop.inrange .noimg {
+    box-shadow: 0 0 34px rgba(125,255,176,.95); }
+  .ar-drop .label {
+    margin-top: 6px; font-size: 12px; font-weight: 700; color: #fff;
+    background: rgba(11,15,30,.72); border-radius: 8px; padding: 3px 8px; display: inline-block;
+  }
+  @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+  .ar-top {
+    position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between;
+    align-items: center; padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px;
+    background: linear-gradient(rgba(0,0,0,.6), transparent);
+  }
+  .ar-close { border: none; border-radius: 999px; width: 42px; height: 42px; font-size: 20px;
+    background: rgba(11,15,30,.75); color: #fff; cursor: pointer; }
+  .ar-compass { font-size: 13px; font-weight: 700; color: #fff; background: rgba(11,15,30,.6);
+    border-radius: 999px; padding: 8px 14px; }
+  .ar-hint {
+    position: absolute; bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+    left: 0; right: 0; text-align: center; color: #fff; font-size: 14px; font-weight: 600;
+    text-shadow: 0 1px 6px rgba(0,0,0,.8); padding: 0 24px;
+  }
+  .edge-arrow {
+    position: absolute; top: 50%; font-size: 34px; color: #7de3ff; transform: translateY(-50%);
+    text-shadow: 0 0 12px rgba(125,227,255,.9); animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: .5; } 50% { opacity: 1; } }
+
+  /* ---------- Inventory ---------- */
+  .inv { padding: 16px; }
+  .inv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .inv-card { background: #141a38; border: 1px solid #232a4d; border-radius: 16px; overflow: hidden; }
+  .inv-card img { width: 100%; aspect-ratio: 1; object-fit: cover; background: #0b0f1e; display: block; }
+  .inv-card .noimg { width: 100%; aspect-ratio: 1; display: flex; align-items: center;
+    justify-content: center; font-size: 40px; background: #0b0f1e; }
+  .inv-card .name { padding: 10px 10px 2px; font-size: 13.5px; font-weight: 700;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .inv-card .mint { padding: 0 10px 10px; font-size: 11.5px; color: #9aa3c7; }
+  .empty { text-align: center; color: #6b7399; padding: 48px 24px; line-height: 1.6; }
+
+  /* ---------- Capture modal ---------- */
+  .modal-bg { position: fixed; inset: 0; background: rgba(4,6,15,.85); z-index: 40;
+    display: flex; align-items: center; justify-content: center; padding: 28px; }
+  .modal { background: #141a38; border: 1px solid #2c3566; border-radius: 22px; padding: 26px;
+    text-align: center; max-width: 340px; width: 100%; }
+  .modal img { width: 140px; height: 140px; border-radius: 18px; object-fit: cover;
+    box-shadow: 0 0 40px rgba(125,255,176,.5); }
+  .modal h2 { margin: 14px 0 6px; font-size: 22px; }
+  .modal p { color: #9aa3c7; font-size: 14px; line-height: 1.5; word-break: break-all; }
+  .modal .btn { margin-top: 18px; width: 100%; }
+  .spinner { width: 44px; height: 44px; margin: 8px auto; border-radius: 50%;
+    border: 4px solid #232a4d; border-top-color: #7de3ff; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+
+<!-- WaxJS must load and be captured in a plain script BEFORE any Babel-processed script,
+     because Babel's eval scope can shadow globals. -->
+<script src="waxjs.js"></script>
+<script>
+  window.__WaxJSClass =
+    (window.waxjs && (waxjs.WaxJS || (waxjs.default && waxjs.default.WaxJS) || waxjs.default)) || null;
+</script>
+
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+/* ============================================================
+   Configuration — edit these values for your deployment.
+   ============================================================ */
+const WAX_CONFIG = {
+  rpcEndpoint: "https://wax.greymass.com",
+  atomicApiBases: [
+    "https://aa.wax.blacklusion.io",
+    "https://wax.api.atomicassets.io",
+  ],
+  ipfsGateway: "https://ipfs.io/ipfs/",
+  collection: "",   // optional Inventory filter; empty shows all NFTs the player owns
+  // Cloudflare Worker base URL (no trailing slash) — set after `wrangler deploy`.
+  workerBase: "https://niftastic-worker.joelcomm.workers.dev",
+  // Shared secret the Worker requires on /capture (same value as the API_SECRET wrangler secret).
+  apiSecret: "0da6e2357cd74e15136888a7905b8de51ce08c908cdc1690",
+  dropsRefreshMs: 20000,
+  arFovDeg: 60,          // horizontal field of view used to place AR sprites
+};
+
+/* ============================================================
+   Helpers
+   ============================================================ */
+function normalizeImage(img) {
+  if (!img) return null;
+  if (img.startsWith("http://") || img.startsWith("https://")) return img;
+  if (img.startsWith("ipfs://")) return WAX_CONFIG.ipfsGateway + img.slice(7);
+  return WAX_CONFIG.ipfsGateway + img; // bare IPFS hash
+}
+
+function haversineMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function bearingDeg(lat1, lng1, lat2, lng2) {
+  const toRad = d => d * Math.PI / 180;
+  const y = Math.sin(toRad(lng2 - lng1)) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lng2 - lng1));
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+function angleDiff(a, b) { // shortest signed difference a-b in [-180, 180]
+  let d = (a - b) % 360;
+  if (d > 180) d -= 360;
+  if (d < -180) d += 360;
+  return d;
+}
+
+function fmtDistance(m) {
+  return m >= 1000 ? (m / 1000).toFixed(1) + " km" : Math.round(m) + " m";
+}
+
+/* ============================================================
+   WAX wallet hook
+   ============================================================ */
+function useWax() {
+  const [wax, setWax] = React.useState(null);
+  const [account, setAccount] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [ready, setReady] = React.useState(false);
+
+  React.useEffect(() => {
+    let attempts = 0;
+    const timer = setInterval(() => {
+      attempts++;
+      const WaxJS = window.__WaxJSClass;
+      if (WaxJS) {
+        clearInterval(timer);
+        const w = new WaxJS({ rpcEndpoint: WAX_CONFIG.rpcEndpoint, tryAutoLogin: false });
+        setWax(w);
+        w.isAutoLoginAvailable().then(auto => {
+          if (auto) setAccount(w.userAccount);
+          setReady(true);
+        }).catch(() => setReady(true));
+      } else if (attempts >= 10) {
+        clearInterval(timer);
+        setError("Could not load the WAX wallet library. Refresh and try again.");
+        setReady(true);
+      }
+    }, 400);
+    return () => clearInterval(timer);
+  }, []);
+
+  const login = async () => {
+    setError(null);
+    try {
+      const user = await wax.login(); // must be called from a user gesture
+      setAccount(user);
+    } catch (e) {
+      setError("Login failed or was cancelled. " + (e.message || ""));
+    }
+  };
+
+  return { wax, account, error, ready, login };
+}
+
+/* ============================================================
+   Geolocation + compass hooks
+   ============================================================ */
+function useGeolocation() {
+  const [pos, setPos] = React.useState(null);
+  const [geoError, setGeoError] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!navigator.geolocation) { setGeoError("Geolocation is not supported on this device."); return; }
+    const id = navigator.geolocation.watchPosition(
+      p => setPos({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }),
+      e => setGeoError(e.code === 1
+        ? "Location permission denied. Enable it in your browser settings to hunt."
+        : "Could not get your location."),
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 }
+    );
+    return () => navigator.geolocation.clearWatch(id);
+  }, []);
+
+  return { pos, geoError };
+}
+
+function useCompass(active) {
+  const [heading, setHeading] = React.useState(null);
+  const [needsPermission, setNeedsPermission] = React.useState(false);
+
+  const handler = React.useCallback(e => {
+    if (typeof e.webkitCompassHeading === "number") {
+      setHeading(e.webkitCompassHeading);           // iOS: already clockwise-from-north
+    } else if (e.absolute && typeof e.alpha === "number") {
+      setHeading((360 - e.alpha) % 360);            // Android absolute orientation
+    } else if (typeof e.alpha === "number") {
+      setHeading((360 - e.alpha) % 360);            // best effort
+    }
+  }, []);
+
+  const requestPermission = React.useCallback(async () => {
+    try {
+      if (typeof DeviceOrientationEvent !== "undefined" &&
+          typeof DeviceOrientationEvent.requestPermission === "function") {
+        const res = await DeviceOrientationEvent.requestPermission();
+        if (res !== "granted") return;
+      }
+      setNeedsPermission(false);
+      window.addEventListener("deviceorientationabsolute", handler, true);
+      window.addEventListener("deviceorientation", handler, true);
+    } catch { /* sensor unavailable — AR falls back to list capture */ }
+  }, [handler]);
+
+  React.useEffect(() => {
+    if (!active) return;
+    if (typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function") {
+      setNeedsPermission(true); // iOS requires a user gesture
+    } else {
+      window.addEventListener("deviceorientationabsolute", handler, true);
+      window.addEventListener("deviceorientation", handler, true);
+    }
+    return () => {
+      window.removeEventListener("deviceorientationabsolute", handler, true);
+      window.removeEventListener("deviceorientation", handler, true);
+    };
+  }, [active, handler]);
+
+  return { heading, needsPermission, requestPermission };
+}
+
+/* ============================================================
+   Drops (from the Worker)
+   ============================================================ */
+function useDrops(pos) {
+  const [drops, setDrops] = React.useState([]);
+  const [fetchError, setFetchError] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!pos) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`${WAX_CONFIG.workerBase}/drops?lat=${pos.lat}&lng=${pos.lng}`);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const body = await res.json();
+        if (!cancelled) { setDrops(body.drops || []); setFetchError(null); }
+      } catch (e) {
+        if (!cancelled) setFetchError("Could not load nearby drops.");
+      }
+    };
+    load();
+    const timer = setInterval(load, WAX_CONFIG.dropsRefreshMs);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [pos && Math.round(pos.lat * 5000), pos && Math.round(pos.lng * 5000)]);
+
+  return { drops, fetchError };
+}
+
+async function captureDrop(account, drop, pos) {
+  const res = await fetch(`${WAX_CONFIG.workerBase}/capture`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Api-Secret": WAX_CONFIG.apiSecret },
+    body: JSON.stringify({ account, dropId: drop.id, lat: pos.lat, lng: pos.lng }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || "Capture failed");
+  return body;
+}
+
+/* ============================================================
+   Radar
+   ============================================================ */
+function Radar({ drops, pos, heading }) {
+  const ref = React.useRef(null);
+  const SIZE = 240, MAX_M = 1500;
+
+  React.useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = SIZE * dpr; cv.height = SIZE * dpr;
+    const ctx = cv.getContext("2d");
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, SIZE, SIZE);
+    const c = SIZE / 2;
+
+    ctx.strokeStyle = "rgba(125,227,255,.25)";
+    [0.33, 0.66, 1].forEach(f => {
+      ctx.beginPath(); ctx.arc(c, c, (c - 6) * f, 0, Math.PI * 2); ctx.stroke();
+    });
+    ctx.beginPath(); ctx.moveTo(c, 6); ctx.lineTo(c, SIZE - 6); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(6, c); ctx.lineTo(SIZE - 6, c); ctx.stroke();
+
+    // "N" marker rotates opposite to heading so the radar is heading-up
+    const hdg = heading || 0;
+    const nAngle = (-hdg - 90) * Math.PI / 180;
+    ctx.fillStyle = "#ff8bd2"; ctx.font = "bold 12px sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("N", c + Math.cos(nAngle) * (c - 16), c + Math.sin(nAngle) * (c - 16));
+
+    // player
+    ctx.fillStyle = "#7de3ff";
+    ctx.beginPath(); ctx.arc(c, c, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(c, c - 14); ctx.lineTo(c - 5, c - 4); ctx.lineTo(c + 5, c - 4);
+    ctx.closePath(); ctx.fill();
+
+    if (pos) {
+      drops.forEach(d => {
+        const dist = Math.min(d.distance, MAX_M);
+        const brg = bearingDeg(pos.lat, pos.lng, d.lat, d.lng);
+        const a = (brg - hdg - 90) * Math.PI / 180;
+        const r = (dist / MAX_M) * (c - 14);
+        const x = c + Math.cos(a) * r, y = c + Math.sin(a) * r;
+        ctx.fillStyle = d.distance <= d.captureRadius ? "#7dffb0" : "#b388ff";
+        ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 8;
+        ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
+      });
+    }
+  }, [drops, pos, heading]);
+
+  return <canvas ref={ref} className="radar" style={{ width: SIZE, height: SIZE }} />;
+}
+
+/* ============================================================
+   AR view
+   ============================================================ */
+function ARView({ drops, pos, account, onClose, onCaptured }) {
+  const videoRef = React.useRef(null);
+  const [camError, setCamError] = React.useState(null);
+  const { heading, needsPermission, requestPermission } = useCompass(true);
+  const [busy, setBusy] = React.useState(false);
+  const [vw, setVw] = React.useState(window.innerWidth);
+  const [vh, setVh] = React.useState(window.innerHeight);
+
+  React.useEffect(() => {
+    const onResize = () => { setVw(window.innerWidth); setVh(window.innerHeight); };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  React.useEffect(() => {
+    let stream;
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" }, audio: false,
+    }).then(s => {
+      stream = s;
+      if (videoRef.current) { videoRef.current.srcObject = s; videoRef.current.play().catch(() => {}); }
+    }).catch(() => setCamError("Camera access denied — you can still capture from the list view."));
+    return () => { if (stream) stream.getTracks().forEach(t => t.stop()); };
+  }, []);
+
+  const tryCapture = async (drop) => {
+    if (busy || !pos) return;
+    setBusy(true);
+    try {
+      const result = await captureDrop(account, drop, pos);
+      onCaptured({ drop, result });
+    } catch (e) {
+      onCaptured({ drop, error: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const halfFov = WAX_CONFIG.arFovDeg / 2;
+  const visible = [], offscreen = [];
+  if (pos && heading !== null) {
+    drops.forEach(d => {
+      const brg = bearingDeg(pos.lat, pos.lng, d.lat, d.lng);
+      const diff = angleDiff(brg, heading);
+      if (Math.abs(diff) <= halfFov) visible.push({ ...d, diff });
+      else offscreen.push({ ...d, diff });
+    });
+  }
+  const nearest = offscreen.sort((a, b) => a.distance - b.distance)[0];
+
+  return (
+    <div className="ar">
+      <video ref={videoRef} playsInline muted autoPlay />
+      <div className="ar-overlay">
+        {visible.map(d => {
+          const size = Math.max(48, Math.min(170, 9000 / Math.max(d.distance, 40)));
+          const x = vw / 2 + (d.diff / halfFov) * (vw / 2) * 0.9;
+          const y = vh * 0.45 + Math.min(d.distance, 800) / 800 * vh * 0.12;
+          const inRange = d.distance <= d.captureRadius;
+          return (
+            <div key={d.id}
+              className={"ar-drop" + (inRange ? " inrange" : "")}
+              style={{ left: x, top: y }}
+              onClick={() => inRange && tryCapture(d)}>
+              {d.image
+                ? <img src={normalizeImage(d.image)} style={{ width: size, height: size }} alt={d.name} />
+                : <div className="noimg" style={{ width: size, height: size, fontSize: size * 0.5 }}>🎁</div>}
+              <div className="label">
+                {d.name} · {fmtDistance(d.distance)}{inRange ? " — TAP!" : ""}
+              </div>
+            </div>
+          );
+        })}
+        {visible.length === 0 && nearest && (
+          <div className="edge-arrow" style={nearest.diff < 0 ? { left: 12 } : { right: 12 }}>
+            {nearest.diff < 0 ? "◀" : "▶"}
+          </div>
+        )}
+      </div>
+      <div className="ar-top">
+        <button className="ar-close" onClick={onClose}>✕</button>
+        <div className="ar-compass">
+          {heading !== null ? Math.round(heading) + "°" : "–"} · {drops.length} nearby
+        </div>
+      </div>
+      <div className="ar-hint">
+        {camError ? camError
+          : needsPermission ? null
+          : heading === null ? "Waiting for compass… move your phone in a figure-8 to calibrate."
+          : busy ? "Capturing…"
+          : visible.length > 0 ? "Tap a glowing NFT to capture it!"
+          : drops.length > 0 ? "Turn toward the arrow to find NFTs."
+          : "No drops nearby. Check the radar and get moving!"}
+      </div>
+      {needsPermission && (
+        <div className="modal-bg">
+          <div className="modal">
+            <h2>Enable Motion &amp; Compass</h2>
+            <p>Niftastic needs your device's compass to point you toward nearby NFTs.</p>
+            <button className="btn" onClick={requestPermission}>Enable</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   Inventory
+   ============================================================ */
+function Inventory({ account, refreshKey }) {
+  const [assets, setAssets] = React.useState(null);
+  const [error, setError] = React.useState(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setAssets(null); setError(null);
+      for (const base of WAX_CONFIG.atomicApiBases) {
+        try {
+          const collectionFilter = WAX_CONFIG.collection
+            ? `&collection_name=${WAX_CONFIG.collection}` : "";
+          const res = await fetch(
+            `${base}/atomicassets/v1/assets?owner=${account}` +
+            `${collectionFilter}&limit=100&order=desc&sort=transferred`);
+          if (!res.ok) continue;
+          const body = await res.json();
+          if (!cancelled) setAssets((body.data || []).map(a => ({
+            id: a.asset_id,
+            name: (a.data && a.data.name) || (a.template && a.template.immutable_data && a.template.immutable_data.name) || "Unnamed",
+            image: normalizeImage(a.data && a.data.img),
+            mint: a.template_mint,
+          })));
+          return;
+        } catch { /* try next API base */ }
+      }
+      if (!cancelled) setError("Could not load your inventory. Pull to refresh or try again later.");
+    })();
+    return () => { cancelled = true; };
+  }, [account, refreshKey]);
+
+  if (error) return <div className="empty">{error}</div>;
+  if (assets === null) return <div className="empty"><div className="spinner" />Loading your collection…</div>;
+  if (assets.length === 0) return (
+    <div className="empty">
+      Your collection is empty.<br />Get out there and start hunting! 🗺️
+    </div>
+  );
+  return (
+    <div className="inv">
+      <div className="inv-grid">
+        {assets.map(a => (
+          <div className="inv-card" key={a.id}>
+            {a.image ? <img src={a.image} alt={a.name} loading="lazy" /> : <div className="noimg">🎴</div>}
+            <div className="name">{a.name}</div>
+            <div className="mint">{a.mint ? "Mint #" + a.mint : "#" + a.id}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   App
+   ============================================================ */
+function App() {
+  const { account, error: waxError, ready, login } = useWax();
+  const { pos, geoError } = useGeolocation();
+  const { drops, fetchError } = useDrops(account ? pos : null);
+  const { heading } = useCompass(Boolean(account));
+  const [tab, setTab] = React.useState("hunt");
+  const [arOpen, setArOpen] = React.useState(false);
+  const [captureResult, setCaptureResult] = React.useState(null);
+  const [busyDrop, setBusyDrop] = React.useState(null);
+  const [invKey, setInvKey] = React.useState(0);
+
+  const handleCaptured = ({ drop, result, error }) => {
+    setArOpen(false);
+    setCaptureResult({ drop, result, error });
+    if (result) setInvKey(k => k + 1);
+  };
+
+  const listCapture = async (drop) => {
+    if (busyDrop || !pos) return;
+    setBusyDrop(drop.id);
+    try {
+      const result = await captureDrop(account, drop, pos);
+      setCaptureResult({ drop, result });
+      setInvKey(k => k + 1);
+    } catch (e) {
+      setCaptureResult({ drop, error: e.message });
+    } finally {
+      setBusyDrop(null);
+    }
+  };
+
+  if (!ready) return (
+    <div className="screen login"><div className="spinner" /><div className="tagline">Loading Niftastic…</div></div>
+  );
+
+  if (!account) return (
+    <div className="screen login">
+      <div className="logo">Niftastic</div>
+      <div className="tagline">Hunt real-world locations for NFTs on the WAX blockchain — find them, tap them, own them.</div>
+      <button className="btn" onClick={login}>Sign in with WAX Cloud Wallet</button>
+      <div className="hint">No wallet? One is created for you, free, during sign-in.</div>
+      {waxError && <div className="err">{waxError}</div>}
+    </div>
+  );
+
+  return (
+    <div className="screen">
+      <div className="header">
+        <div className="brand">Niftastic</div>
+        <div className="account">{account}</div>
+      </div>
+
+      <div className="main">
+        {tab === "hunt" && (
+          <div className="hunt">
+            <div className="radar-wrap"><Radar drops={drops} pos={pos} heading={heading} /></div>
+            <div className="status-line">
+              {geoError ? geoError
+                : !pos ? "Finding your location…"
+                : fetchError ? fetchError
+                : drops.length === 0 ? "No active drops within 5 km. Explore somewhere new!"
+                : drops.length + (drops.length === 1 ? " drop" : " drops") + " nearby"}
+            </div>
+            {drops.map(d => {
+              const inRange = d.distance <= d.captureRadius;
+              return (
+                <div className="drop-card" key={d.id}>
+                  {d.image
+                    ? <img src={normalizeImage(d.image)} alt={d.name} />
+                    : <div className="noimg">🎁</div>}
+                  <div className="drop-info">
+                    <div className="name">{d.name}</div>
+                    <div className="meta">
+                      {inRange
+                        ? <span className="inrange">In range — capture it!</span>
+                        : fmtDistance(d.distance) + " away"}
+                      {" · "}{d.remaining} left
+                    </div>
+                  </div>
+                  <button className="capture-btn" disabled={!inRange || busyDrop === d.id}
+                    onClick={() => listCapture(d)}>
+                    {busyDrop === d.id ? "…" : inRange ? "Capture" : fmtDistance(d.distance)}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {tab === "inventory" && <Inventory account={account} refreshKey={invKey} />}
+      </div>
+
+      {tab === "hunt" && pos && (
+        <button className="ar-fab" onClick={() => setArOpen(true)}>📷 AR Hunt</button>
+      )}
+
+      <div className="tabs">
+        <div className={"tab" + (tab === "hunt" ? " active" : "")} onClick={() => setTab("hunt")}>🗺️ Hunt</div>
+        <div className={"tab" + (tab === "inventory" ? " active" : "")} onClick={() => setTab("inventory")}>🎒 Inventory</div>
+      </div>
+
+      {arOpen && (
+        <ARView drops={drops} pos={pos} account={account}
+          onClose={() => setArOpen(false)} onCaptured={handleCaptured} />
+      )}
+
+      {captureResult && (
+        <div className="modal-bg" onClick={() => setCaptureResult(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            {captureResult.error ? (
+              <React.Fragment>
+                <h2>😕 Not this time</h2>
+                <p>{captureResult.error}</p>
+              </React.Fragment>
+            ) : (
+              <React.Fragment>
+                {captureResult.drop.image
+                  ? <img src={normalizeImage(captureResult.drop.image)} alt={captureResult.drop.name} />
+                  : <div style={{ fontSize: 90 }}>🎉</div>}
+                <h2>Captured!</h2>
+                <p><b>{captureResult.drop.name}</b> has been transferred to your WAX wallet.</p>
+                <p style={{ fontSize: 11 }}>tx: {captureResult.result.transaction_id}</p>
+              </React.Fragment>
+            )}
+            <button className="btn" onClick={() => setCaptureResult(null)}>
+              {captureResult.error ? "OK" : "Awesome!"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

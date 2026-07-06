@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Niftastic Admin — Drop Manager</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0b0f1e; color: #eef1ff; height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 14px 18px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    background: #101736; border-bottom: 1px solid #232a4d; }
+  header h1 { font-size: 18px;
+    background: linear-gradient(90deg, #7de3ff, #b388ff);
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header input { background: #0b0f1e; border: 1px solid #232a4d; color: #eef1ff;
+    border-radius: 8px; padding: 8px 10px; font-size: 13px; width: 260px; }
+  .layout { flex: 1; display: flex; min-height: 0; }
+  #map { flex: 1; }
+  aside { width: 340px; overflow-y: auto; background: #101736; border-left: 1px solid #232a4d; padding: 16px; }
+  aside h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: #9aa3c7; margin-bottom: 10px; }
+  .field { margin-bottom: 10px; }
+  .field label { display: block; font-size: 12px; color: #9aa3c7; margin-bottom: 4px; }
+  .field input, .field select { width: 100%; background: #0b0f1e; border: 1px solid #232a4d;
+    color: #eef1ff; border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+  .row { display: flex; gap: 8px; }
+  .row .field { flex: 1; }
+  button { border: none; border-radius: 10px; padding: 10px 14px; font-weight: 700;
+    font-size: 14px; cursor: pointer; }
+  .primary { width: 100%; background: linear-gradient(90deg, #7de3ff, #b388ff); color: #0b0f1e; margin-top: 6px; }
+  .primary:disabled { background: #232a4d; color: #6b7399; }
+  .danger { background: #3a1a2a; color: #ff8b8b; font-size: 12px; padding: 6px 10px; }
+  .drop-item { background: #141a38; border: 1px solid #232a4d; border-radius: 12px;
+    padding: 10px 12px; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
+  .drop-item img { width: 40px; height: 40px; border-radius: 8px; object-fit: cover; background: #0b0f1e; }
+  .drop-item .info { flex: 1; min-width: 0; }
+  .drop-item .name { font-size: 13.5px; font-weight: 700; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .drop-item .meta { font-size: 11.5px; color: #9aa3c7; }
+  .msg { font-size: 13px; margin: 8px 0; min-height: 18px; }
+  .msg.ok { color: #7dffb0; } .msg.err { color: #ff8b8b; }
+  .hint { font-size: 12px; color: #6b7399; margin-bottom: 12px; line-height: 1.5; }
+  hr { border: none; border-top: 1px solid #232a4d; margin: 16px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Niftastic Drop Manager</h1>
+  <input id="workerBase" placeholder="Worker base URL (https://...workers.dev)" />
+  <input id="adminSecret" type="password" placeholder="Admin secret" />
+  <button class="primary" style="width:auto;margin:0" onclick="connect()">Connect</button>
+</header>
+<div class="layout">
+  <div id="map"></div>
+  <aside>
+    <h2>New Drop</h2>
+    <div class="hint">NFTs are distributed from the <b>boxinventory</b> vault wallet — send NFTs
+      there first, then drop them here. Click the map to set the location, enter the collection
+      and template ID, and the name, image, and vault stock are looked up automatically.</div>
+    <div class="row">
+      <div class="field"><label>Latitude</label><input id="lat" readonly placeholder="click map" /></div>
+      <div class="field"><label>Longitude</label><input id="lng" readonly placeholder="click map" /></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Collection</label>
+        <input id="collection" placeholder="e.g. officialhero" /></div>
+      <div class="field"><label>Template ID</label>
+        <input id="template" placeholder="e.g. 904586" onblur="lookupTemplate()" /></div>
+    </div>
+    <div class="field"><label>Name</label><input id="name" placeholder="auto-filled from template" /></div>
+    <div class="field"><label>Image (IPFS hash or URL)</label><input id="image" placeholder="auto-filled from template" /></div>
+    <div class="row">
+      <div class="field"><label>Quantity</label><input id="quantity" type="number" value="10" min="1" /></div>
+      <div class="field"><label>Capture radius (m)</label><input id="radius" type="number" value="50" min="10" /></div>
+    </div>
+    <div class="field"><label>Rarity label (optional)</label><input id="rarity" placeholder="e.g. Rare" /></div>
+    <div class="field"><label><input id="oncePerPlayer" type="checkbox" style="width:auto;margin-right:6px" />
+      One per player (skip if wallet already owns this template)</label></div>
+    <button class="primary" id="createBtn" onclick="createDrop()" disabled>Place Drop</button>
+    <div class="msg" id="msg"></div>
+    <hr />
+    <h2>Active Drops (<span id="count">0</span>)</h2>
+    <div id="dropList"></div>
+  </aside>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const VAULT_ACCOUNT = "boxinventory";
+const ATOMIC_API = "https://wax.api.atomicassets.io";
+const IPFS_GATEWAY = "https://ipfs.io/ipfs/";
+
+let map, clickMarker, dropLayer;
+let connected = false;
+
+function cfg() {
+  return {
+    base: document.getElementById("workerBase").value.trim().replace(/\/$/, ""),
+    secret: document.getElementById("adminSecret").value,
+  };
+}
+
+function normalizeImage(img) {
+  if (!img) return null;
+  if (/^https?:\/\//.test(img)) return img;
+  if (img.startsWith("ipfs://")) return IPFS_GATEWAY + img.slice(7);
+  return IPFS_GATEWAY + img;
+}
+
+function setMsg(text, ok) {
+  const el = document.getElementById("msg");
+  el.textContent = text;
+  el.className = "msg " + (ok ? "ok" : "err");
+}
+
+function initMap() {
+  map = L.map("map").setView([40.758, -73.9855], 13); // Times Square default, per the proposal
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap contributors", maxZoom: 19,
+  }).addTo(map);
+  dropLayer = L.layerGroup().addTo(map);
+  map.on("click", e => {
+    document.getElementById("lat").value = e.latlng.lat.toFixed(6);
+    document.getElementById("lng").value = e.latlng.lng.toFixed(6);
+    if (clickMarker) clickMarker.setLatLng(e.latlng);
+    else clickMarker = L.marker(e.latlng).addTo(map);
+    updateCreateBtn();
+  });
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(p =>
+      map.setView([p.coords.latitude, p.coords.longitude], 15), () => {});
+  }
+  // Restore saved connection settings
+  const saved = JSON.parse(localStorage.getItem("niftasticAdmin") || "{}");
+  if (saved.base) document.getElementById("workerBase").value = saved.base;
+  if (saved.secret) document.getElementById("adminSecret").value = saved.secret;
+}
+
+function updateCreateBtn() {
+  document.getElementById("createBtn").disabled =
+    !connected || !document.getElementById("lat").value;
+}
+
+async function connect() {
+  const { base, secret } = cfg();
+  if (!base || !secret) { setMsg("Enter the worker URL and admin secret.", false); return; }
+  try {
+    const res = await fetch(base + "/admin/drops", { headers: { "X-Admin-Secret": secret } });
+    if (res.status === 401) { setMsg("Admin secret rejected.", false); return; }
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const body = await res.json();
+    connected = true;
+    localStorage.setItem("niftasticAdmin", JSON.stringify({ base, secret }));
+    setMsg("Connected — " + body.drops.length + " drops loaded.", true);
+    renderDrops(body.drops);
+    updateCreateBtn();
+  } catch (e) {
+    setMsg("Could not reach the worker: " + e.message, false);
+  }
+}
+
+async function lookupTemplate() {
+  const id = document.getElementById("template").value.trim();
+  const collection = document.getElementById("collection").value.trim();
+  if (!id) return;
+  if (!collection) { setMsg("Enter the collection name first.", false); return; }
+  try {
+    const res = await fetch(`${ATOMIC_API}/atomicassets/v1/templates/${collection}/${id}`);
+    if (!res.ok) throw new Error();
+    const body = await res.json();
+    const data = body.data && body.data.immutable_data || {};
+    if (data.name && !document.getElementById("name").value)
+      document.getElementById("name").value = data.name;
+    if (data.img && !document.getElementById("image").value)
+      document.getElementById("image").value = data.img;
+    // How many copies does the vault actually hold?
+    const stockRes = await fetch(
+      `${ATOMIC_API}/atomicassets/v1/assets?owner=${VAULT_ACCOUNT}&template_id=${id}&limit=500`);
+    const stock = stockRes.ok ? ((await stockRes.json()).data || []).length : null;
+    if (stock === 0) {
+      setMsg(`Template found (${data.name || id}) but the vault holds 0 copies — send some to ${VAULT_ACCOUNT} first.`, false);
+    } else if (stock !== null) {
+      setMsg(`Template found: ${data.name || id} — vault holds ${stock}${stock === 500 ? "+" : ""} cop${stock === 1 ? "y" : "ies"}.`, true);
+      const qty = document.getElementById("quantity");
+      if (parseInt(qty.value, 10) > stock) qty.value = stock;
+    } else {
+      setMsg("Template found: " + (data.name || id), true);
+    }
+  } catch {
+    setMsg("Template " + id + " not found in " + collection + " — you can still fill fields manually.", false);
+  }
+}
+
+async function createDrop() {
+  const { base, secret } = cfg();
+  const payload = {
+    name: document.getElementById("name").value.trim(),
+    template_id: document.getElementById("template").value.trim(),
+    collection_name: document.getElementById("collection").value.trim() || null,
+    image: document.getElementById("image").value.trim() || null,
+    lat: parseFloat(document.getElementById("lat").value),
+    lng: parseFloat(document.getElementById("lng").value),
+    quantity: parseInt(document.getElementById("quantity").value, 10),
+    captureRadius: parseInt(document.getElementById("radius").value, 10),
+    rarity: document.getElementById("rarity").value.trim() || null,
+    oncePerPlayer: document.getElementById("oncePerPlayer").checked,
+  };
+  if (!payload.name || !payload.template_id) { setMsg("Name and template ID are required.", false); return; }
+  try {
+    const res = await fetch(base + "/admin/drops", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Admin-Secret": secret },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || "HTTP " + res.status);
+    setMsg("Drop placed: " + payload.name, true);
+    refreshDrops();
+  } catch (e) {
+    setMsg("Create failed: " + e.message, false);
+  }
+}
+
+async function deleteDrop(id) {
+  const { base, secret } = cfg();
+  if (!confirm("Delete this drop?")) return;
+  try {
+    const res = await fetch(base + "/admin/drops/" + id, {
+      method: "DELETE", headers: { "X-Admin-Secret": secret },
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    refreshDrops();
+  } catch (e) {
+    setMsg("Delete failed: " + e.message, false);
+  }
+}
+
+async function refreshDrops() {
+  const { base, secret } = cfg();
+  const res = await fetch(base + "/admin/drops", { headers: { "X-Admin-Secret": secret } });
+  if (res.ok) renderDrops((await res.json()).drops);
+}
+
+function renderDrops(drops) {
+  document.getElementById("count").textContent = drops.length;
+  dropLayer.clearLayers();
+  const list = document.getElementById("dropList");
+  list.innerHTML = "";
+  drops.forEach(d => {
+    L.circle([d.lat, d.lng], { radius: d.captureRadius, color: "#b388ff", fillOpacity: .15 })
+      .addTo(dropLayer).bindPopup(`<b>${d.name}</b><br>${d.remaining} remaining`);
+    const el = document.createElement("div");
+    el.className = "drop-item";
+    const img = normalizeImage(d.image);
+    el.innerHTML = `
+      ${img ? `<img src="${img}" alt="">` : `<div style="width:40px;height:40px;border-radius:8px;background:#232a4d;display:flex;align-items:center;justify-content:center">🎁</div>`}
+      <div class="info">
+        <div class="name">${d.name}</div>
+        <div class="meta">tpl ${d.template_id} · ${d.remaining}/${d.remaining + (d.captured || 0)} left · r=${d.captureRadius}m</div>
+      </div>`;
+    const btn = document.createElement("button");
+    btn.className = "danger"; btn.textContent = "Delete";
+    btn.onclick = () => deleteDrop(d.id);
+    el.appendChild(btn);
+    el.onclick = e => { if (e.target !== btn) map.setView([d.lat, d.lng], 16); };
+    list.appendChild(el);
+  });
+}
+
+initMap();
+</script>
+</body>
+</html>

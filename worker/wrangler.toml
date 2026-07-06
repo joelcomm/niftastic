@@ -1,0 +1,15 @@
+name = "niftastic-worker"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Create the namespace first:  npx wrangler kv namespace create DROPS
+# then paste the generated id below.
+[[kv_namespaces]]
+binding = "DROPS"
+id = "91ece4cd1a6343e99a4719be5ebfdcf2"
+
+# Secrets (set via CLI, never committed):
+#   npx wrangler secret put WAX_PRIVATE_KEY   — active key of the minter account
+#   npx wrangler secret put API_SECRET        — shared secret the game client sends
+#   npx wrangler secret put ADMIN_SECRET      — secret for the admin drop tool

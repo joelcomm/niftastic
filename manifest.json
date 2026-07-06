@@ -1,0 +1,11 @@
+{
+  "name": "Niftastic",
+  "short_name": "Niftastic",
+  "description": "Hunt real-world locations for NFTs on the WAX blockchain.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0f1e",
+  "theme_color": "#0b0f1e",
+  "icons": []
+}
