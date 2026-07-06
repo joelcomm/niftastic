@@ -3,3 +3,4 @@ node_modules/
 worker/.dev.vars
 worker/.wrangler/
 worker/.secrets.local
+worker/.active-key.local

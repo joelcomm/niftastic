@@ -42,6 +42,25 @@
   .msg.ok { color: #7dffb0; } .msg.err { color: #ff8b8b; }
   .hint { font-size: 12px; color: #6b7399; margin-bottom: 12px; line-height: 1.5; }
   hr { border: none; border-top: 1px solid #232a4d; margin: 16px 0; }
+  .map-wrap { flex: 1; position: relative; display: flex; }
+  .map-search { position: absolute; top: 12px; left: 56px; z-index: 1000; width: 320px; }
+  .map-search input { width: 100%; background: #101736; border: 1px solid #2c3566; color: #eef1ff;
+    border-radius: 10px; padding: 10px 12px; font-size: 14px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  .map-results { background: #101736; border: 1px solid #2c3566; border-radius: 10px;
+    margin-top: 4px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  .map-results div { padding: 9px 12px; font-size: 13px; cursor: pointer;
+    border-bottom: 1px solid #232a4d; }
+  .map-results div:last-child { border-bottom: none; }
+  .map-results div:hover { background: #1a2148; }
+  .vault-list { max-height: 240px; overflow-y: auto; margin-top: 8px; }
+  .vault-item { display: flex; align-items: center; gap: 10px; padding: 7px 8px;
+    border-radius: 10px; cursor: pointer; }
+  .vault-item:hover { background: #1a2148; }
+  .vault-item img { width: 34px; height: 34px; border-radius: 7px; object-fit: cover; background: #0b0f1e; }
+  .vault-item .vname { flex: 1; min-width: 0; font-size: 13px; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vault-item .vmeta { font-size: 11px; color: #9aa3c7; white-space: nowrap; }
+  .vault-item .vcount { font-size: 12px; font-weight: 700; color: #7de3ff; }
 </style>
 </head>
 <body>
@@ -52,7 +71,14 @@
   <button class="primary" style="width:auto;margin:0" onclick="connect()">Connect</button>
 </header>
 <div class="layout">
-  <div id="map"></div>
+  <div class="map-wrap">
+    <div id="map" style="flex:1"></div>
+    <div class="map-search">
+      <input id="placeSearch" placeholder="Search a place or address… (Enter)"
+        onkeydown="if(event.key==='Enter')searchPlace()" autocomplete="off" />
+      <div class="map-results" id="placeResults" style="display:none"></div>
+    </div>
+  </div>
   <aside>
     <h2>New Drop</h2>
     <div class="hint">NFTs are distributed from the <b>boxinventory</b> vault wallet — send NFTs
@@ -79,6 +105,13 @@
       One per player (skip if wallet already owns this template)</label></div>
     <button class="primary" id="createBtn" onclick="createDrop()" disabled>Place Drop</button>
     <div class="msg" id="msg"></div>
+    <hr />
+    <h2>Vault (<span id="vaultCount">…</span> NFTs)</h2>
+    <div class="field">
+      <input id="vaultSearch" placeholder="Search vault by name or collection…"
+        oninput="renderVault()" autocomplete="off" />
+    </div>
+    <div class="vault-list" id="vaultList"><div class="hint">Loading vault contents…</div></div>
     <hr />
     <h2>Active Drops (<span id="count">0</span>)</h2>
     <div id="dropList"></div>
@@ -268,7 +301,112 @@ function renderDrops(drops) {
   });
 }
 
+/* ---------- Place search (Nominatim / OpenStreetMap geocoder) ---------- */
+async function searchPlace() {
+  const q = document.getElementById("placeSearch").value.trim();
+  const box = document.getElementById("placeResults");
+  if (!q) { box.style.display = "none"; return; }
+  box.style.display = "block";
+  box.innerHTML = "<div>Searching…</div>";
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q)}`);
+    const results = await res.json();
+    if (!results.length) { box.innerHTML = "<div>No results found.</div>"; return; }
+    box.innerHTML = "";
+    results.forEach(r => {
+      const el = document.createElement("div");
+      el.textContent = r.display_name;
+      el.onclick = () => {
+        map.setView([parseFloat(r.lat), parseFloat(r.lon)], 15);
+        box.style.display = "none";
+      };
+      box.appendChild(el);
+    });
+  } catch {
+    box.innerHTML = "<div>Search failed — try again.</div>";
+  }
+}
+document.addEventListener("click", e => {
+  if (!e.target.closest(".map-search"))
+    document.getElementById("placeResults").style.display = "none";
+});
+
+/* ---------- Vault browser ---------- */
+let vaultTemplates = [];
+
+async function loadVault() {
+  const byTemplate = new Map();
+  try {
+    for (let page = 1; page <= 5; page++) {
+      const res = await fetch(
+        `${ATOMIC_API}/atomicassets/v1/assets?owner=${VAULT_ACCOUNT}&limit=1000&page=${page}`);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = (await res.json()).data || [];
+      data.forEach(a => {
+        const tpl = a.template && a.template.template_id;
+        if (!tpl) return; // assets without a template can't be dropped by template
+        const key = a.collection.collection_name + ":" + tpl;
+        const entry = byTemplate.get(key);
+        if (entry) entry.count++;
+        else byTemplate.set(key, {
+          collection: a.collection.collection_name,
+          template_id: String(tpl),
+          name: (a.data && a.data.name) || "Unnamed",
+          img: (a.data && a.data.img) || null,
+          count: 1,
+        });
+      });
+      if (data.length < 1000) break;
+    }
+    vaultTemplates = [...byTemplate.values()].sort((a, b) => b.count - a.count);
+    document.getElementById("vaultCount").textContent =
+      vaultTemplates.reduce((n, t) => n + t.count, 0);
+    renderVault();
+  } catch (e) {
+    document.getElementById("vaultList").innerHTML =
+      '<div class="hint">Could not load vault contents — refresh to retry.</div>';
+    document.getElementById("vaultCount").textContent = "?";
+  }
+}
+
+function renderVault() {
+  const q = document.getElementById("vaultSearch").value.trim().toLowerCase();
+  const list = document.getElementById("vaultList");
+  const matches = vaultTemplates.filter(t =>
+    !q || t.name.toLowerCase().includes(q) ||
+    t.collection.toLowerCase().includes(q) || t.template_id.includes(q));
+  if (!matches.length) {
+    list.innerHTML = '<div class="hint">No vault NFTs match that search.</div>';
+    return;
+  }
+  list.innerHTML = "";
+  matches.slice(0, 100).forEach(t => {
+    const el = document.createElement("div");
+    el.className = "vault-item";
+    el.title = "Click to fill the drop form";
+    const img = normalizeImage(t.img);
+    el.innerHTML = `
+      ${img ? `<img src="${img}" alt="" loading="lazy">` : `<div style="width:34px;height:34px;border-radius:7px;background:#232a4d;display:flex;align-items:center;justify-content:center">🎁</div>`}
+      <div class="vname">${t.name}<div class="vmeta">${t.collection} · tpl ${t.template_id}</div></div>
+      <div class="vcount">×${t.count}</div>`;
+    el.onclick = () => pickVaultItem(t);
+    list.appendChild(el);
+  });
+}
+
+function pickVaultItem(t) {
+  document.getElementById("collection").value = t.collection;
+  document.getElementById("template").value = t.template_id;
+  document.getElementById("name").value = t.name;
+  document.getElementById("image").value = t.img || "";
+  const qty = document.getElementById("quantity");
+  if (parseInt(qty.value, 10) > t.count || !qty.value) qty.value = t.count;
+  setMsg(`Selected ${t.name} — vault holds ${t.count}. Now click the map to set the location.`, true);
+}
+
 initMap();
+loadVault();
 </script>
 </body>
 </html>
