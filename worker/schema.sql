@@ -52,6 +52,13 @@ CREATE TABLE IF NOT EXISTS captures (
 );
 CREATE INDEX IF NOT EXISTS idx_captures_account ON captures(account);
 
+-- Cached OSM road/water geometry per ~1km cell (30-day TTL in code).
+CREATE TABLE IF NOT EXISTS geo_cache (
+  cell TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  at TEXT NOT NULL
+);
+
 -- Spawn triggers, for budget enforcement.
 CREATE TABLE IF NOT EXISTS spawn_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

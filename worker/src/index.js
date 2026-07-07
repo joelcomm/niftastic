@@ -219,6 +219,197 @@ async function mintTo(env, account, drop) {
 }
 
 /* ============================================================
+   Geo-obstacle avoidance — random points never land on mapped
+   streets/highways or in water (OpenStreetMap via Overpass).
+   ============================================================ */
+const OVERPASS_URLS = [
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+  "https://overpass-api.de/api/interpreter",
+];
+const OVERPASS_FETCH_TIMEOUT_MS = 8000;
+const ROAD_BUFFER_M = 12;   // min distance from a vehicular road centerline
+const WATER_BUFFER_M = 10;  // min distance from water edges / stream centerlines
+const VEHICLE_ROADS =
+  "motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|" +
+  "living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link";
+
+const obstacleCache = new Map(); // cell key -> { at, data } (per-isolate hot cache)
+const OBSTACLE_TTL_MS = 10 * 60_000;
+const GEO_CACHE_TTL_MS = 30 * 24 * 3600_000; // roads/water rarely change — D1 cache for a month
+
+async function fetchObstacles(env, lat, lng, radiusM) {
+  const key = geocell(lat, lng) + ":" + Math.round(radiusM / 100);
+  const hit = obstacleCache.get(key);
+  if (hit && Date.now() - hit.at < OBSTACLE_TTL_MS) return hit.data;
+
+  // Persistent cache: any successful fetch for this cell serves for 30 days.
+  try {
+    const row = await env.DB.prepare("SELECT data, at FROM geo_cache WHERE cell = ?").bind(key).first();
+    if (row && Date.now() - Date.parse(row.at) < GEO_CACHE_TTL_MS) {
+      const data = JSON.parse(row.data);
+      obstacleCache.set(key, { at: Date.now(), data });
+      return data;
+    }
+  } catch { /* cache miss path */ }
+
+  const b = bbox(lat, lng, radiusM);
+  const bb = `${b.minLat},${b.minLng},${b.maxLat},${b.maxLng}`;
+  const q =
+    `[out:json][timeout:6];(` +
+    `way[highway~"^(${VEHICLE_ROADS})$"](${bb});` +
+    `way[natural=water](${bb});relation[natural=water](${bb});` +
+    `way[waterway~"^(river|stream|canal|riverbank)$"](${bb});` +
+    `way[natural=coastline](${bb});` +
+    `);out geom;`;
+  for (const url of OVERPASS_URLS) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "Niftastic/1.0 (AR NFT hunt; drop placement checks; contact: joel@niftycompany.com)",
+        },
+        body: "data=" + encodeURIComponent(q),
+        signal: AbortSignal.timeout(OVERPASS_FETCH_TIMEOUT_MS),
+      });
+      if (!res.ok) continue; // rate-limited or down — try the next mirror
+      const data = parseObstacles(await res.json());
+      obstacleCache.set(key, { at: Date.now(), data });
+      try {
+        await env.DB.prepare(
+          "INSERT INTO geo_cache (cell, data, at) VALUES (?,?,?) " +
+          "ON CONFLICT(cell) DO UPDATE SET data=excluded.data, at=excluded.at"
+        ).bind(key, JSON.stringify(data), new Date().toISOString()).run();
+      } catch { /* persistence is best-effort */ }
+      return data;
+    } catch { /* try next mirror */ }
+  }
+  return null; // all mirrors unavailable — place unchecked rather than block gameplay
+}
+
+// Admin diagnostic: shows what each Overpass mirror returns for an area.
+async function geoDebug(lat, lng, radiusM) {
+  const b = bbox(lat, lng, radiusM);
+  const bb = `${b.minLat},${b.minLng},${b.maxLat},${b.maxLng}`;
+  const q =
+    `[out:json][timeout:6];(` +
+    `way[highway~"^(${VEHICLE_ROADS})$"](${bb});` +
+    `way[natural=water](${bb});relation[natural=water](${bb});` +
+    `way[waterway~"^(river|stream|canal|riverbank)$"](${bb});` +
+    `way[natural=coastline](${bb});` +
+    `);out geom;`;
+  const results = [];
+  for (const url of OVERPASS_URLS) {
+    const started = Date.now();
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "Niftastic/1.0 (AR NFT hunt; drop placement checks; contact: joel@niftycompany.com)",
+        },
+        body: "data=" + encodeURIComponent(q),
+      });
+      const text = await res.text();
+      let parsed = null;
+      try {
+        const data = parseObstacles(JSON.parse(text));
+        parsed = { roads: data.roads.length, waterLines: data.waterLines.length, waterRings: data.waterRings.length };
+      } catch { /* not JSON */ }
+      results.push({ url, status: res.status, ms: Date.now() - started, bytes: text.length, parsed, snippet: parsed ? undefined : text.slice(0, 180) });
+    } catch (e) {
+      results.push({ url, error: String(e.message || e), ms: Date.now() - started });
+    }
+  }
+  return results;
+}
+
+function parseObstacles(osm) {
+  const roads = [], waterLines = [], waterRings = [];
+  const addWay = (tags, geometry) => {
+    if (!geometry || geometry.length < 2) return;
+    const line = geometry.map((g) => [g.lat, g.lon]);
+    if (tags.highway) roads.push(line);
+    else if (tags.natural === "coastline" || tags.waterway) waterLines.push(line);
+    else if (tags.natural === "water") {
+      const [f, l] = [line[0], line[line.length - 1]];
+      if (line.length > 3 && f[0] === l[0] && f[1] === l[1]) waterRings.push(line);
+      else waterLines.push(line);
+    }
+  };
+  for (const el of osm.elements || []) {
+    if (el.type === "way") addWay(el.tags || {}, el.geometry);
+    else if (el.type === "relation") {
+      for (const m of el.members || []) {
+        if (m.type === "way" && m.geometry) addWay({ natural: "water" }, m.geometry);
+      }
+    }
+  }
+  return { roads, waterLines, waterRings };
+}
+
+// Distance from a point to a polyline, in meters (equirectangular local approx).
+function nearLine(latP, lngP, line, bufferM) {
+  const toXY = (lat, lng) => [
+    (lng - lngP) * 111320 * Math.cos((latP * Math.PI) / 180),
+    (lat - latP) * 111320,
+  ];
+  const buf2 = bufferM * bufferM;
+  let [ax, ay] = toXY(line[0][0], line[0][1]);
+  for (let i = 1; i < line.length; i++) {
+    const [bx, by] = toXY(line[i][0], line[i][1]);
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 ? Math.max(0, Math.min(1, (-ax * dx - ay * dy) / len2)) : 0;
+    const cx = ax + t * dx, cy = ay + t * dy;
+    if (cx * cx + cy * cy <= buf2) return true;
+    ax = bx; ay = by;
+  }
+  return false;
+}
+
+function insideRing(latP, lngP, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [yi, xi] = ring[i], [yj, xj] = ring[j];
+    if ((yi > latP) !== (yj > latP) &&
+        lngP < ((xj - xi) * (latP - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function isBlocked(lat, lng, obs) {
+  if (!obs) return false;
+  for (const r of obs.roads) if (nearLine(lat, lng, r, ROAD_BUFFER_M)) return true;
+  for (const l of obs.waterLines) if (nearLine(lat, lng, l, WATER_BUFFER_M)) return true;
+  for (const ring of obs.waterRings) {
+    if (insideRing(lat, lng, ring) || nearLine(lat, lng, ring, WATER_BUFFER_M)) return true;
+  }
+  return false;
+}
+
+// Generate `count` random points around a center that avoid roads and water.
+// Falls back to unchecked placement if an area is so dense nothing clears
+// (or if obstacle data is unavailable) — the game must keep working.
+// The returned array carries a `geoChecked` property for observability.
+async function safePointsNear(env, lat, lng, minM, maxM, count) {
+  const obs = await fetchObstacles(env, lat, lng, maxM + 50);
+  const points = [];
+  for (let i = 0; i < count; i++) {
+    let point = null;
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const cand = randomPointNear(lat, lng, minM, maxM);
+      if (!isBlocked(cand.lat, cand.lng, obs)) { point = cand; break; }
+    }
+    points.push(point || randomPointNear(lat, lng, minM, maxM));
+  }
+  points.geoChecked = obs !== null;
+  return points;
+}
+
+/* ============================================================
    Auto-spawn
    ============================================================ */
 
@@ -305,6 +496,7 @@ async function maybeSpawn(env, lat, lng, account, nearbyActiveCount) {
   if (!pool.length) return 0;
 
   const toSpawn = MIN_ACTIVE_NEARBY - nearbyActiveCount;
+  const points = await safePointsNear(env, lat, lng, SPAWN_MIN_M, SPAWN_MAX_M, toSpawn);
   const drops = [];
   for (let i = 0; i < toSpawn; i++) {
     const entry = weightedPick(pool);
@@ -314,7 +506,7 @@ async function maybeSpawn(env, lat, lng, account, nearbyActiveCount) {
         if (!(await pickVaultAsset(entry.template_id))) continue;
       } catch { /* API hiccup — spawn anyway; capture re-checks */ }
     }
-    drops.push(dropFromPoolEntry(entry, randomPointNear(lat, lng, SPAWN_MIN_M, SPAWN_MAX_M)));
+    drops.push(dropFromPoolEntry(entry, points[drops.length]));
   }
   if (drops.length) await insertDrops(env, drops);
 
@@ -359,7 +551,8 @@ async function maybeGuaranteed(env, lat, lng, account) {
       } catch { /* try it anyway */ }
     }
 
-    const drop = dropFromPoolEntry(entry, randomPointNear(lat, lng, STARTER_MIN_M, STARTER_MAX_M), {
+    const [point] = await safePointsNear(env, lat, lng, STARTER_MIN_M, STARTER_MAX_M, 1);
+    const drop = dropFromPoolEntry(entry, point, {
       source: "starter",
       reservedFor: account,
       ttlHours: STARTER_TTL_HOURS,
@@ -499,6 +692,20 @@ async function handleAdmin(request, url, env) {
   const parts = url.pathname.split("/").filter(Boolean); // ["admin", resource, maybe id]
   const resource = parts[1];
 
+  if (resource === "geodebug" && request.method === "GET") {
+    if (url.searchParams.get("echo")) {
+      const res = await fetch("https://httpbin.org/headers", {
+        headers: { "User-Agent": "Niftastic/1.0 (test)" },
+      });
+      return json(await res.json());
+    }
+    const lat = parseFloat(url.searchParams.get("lat"));
+    const lng = parseFloat(url.searchParams.get("lng"));
+    const r = parseFloat(url.searchParams.get("r")) || 300;
+    if (Number.isNaN(lat) || Number.isNaN(lng)) return json({ error: "lat/lng required" }, 400);
+    return json({ mirrors: await geoDebug(lat, lng, r) });
+  }
+
   /* ----- drops ----- */
   if (resource === "drops") {
     if (request.method === "GET" && parts.length === 2) {
@@ -555,13 +762,17 @@ async function handleAdmin(request, url, env) {
         created: new Date().toISOString(),
       });
 
-      const created =
-        scatterRadius > 0 && qty > 1
-          ? Array.from({ length: qty }, () => makeDrop(randomPointNear(lat, lng, 0, scatterRadius), 1))
-          : [makeDrop({ lat, lng }, qty)];
+      let created, geoChecked = null;
+      if (scatterRadius > 0 && qty > 1) {
+        const points = await safePointsNear(env, lat, lng, 0, scatterRadius, qty);
+        geoChecked = points.geoChecked;
+        created = points.map((p) => makeDrop(p, 1));
+      } else {
+        created = [makeDrop({ lat, lng }, qty)]; // exact admin click — placed as-is
+      }
 
       await insertDrops(env, created);
-      return json({ ok: true, drops: created.map(publicDrop) }, 201);
+      return json({ ok: true, geoChecked, drops: created.map(publicDrop) }, 201);
     }
 
     if (request.method === "DELETE" && parts.length === 3) {
