@@ -116,11 +116,11 @@
     position: absolute; transform: translate(-50%, -50%); text-align: center;
     transition: left .15s linear, top .2s ease; cursor: pointer;
   }
-  .ar-drop .spin {
-    margin: 0 auto; border-radius: 16px;
-    box-shadow: 0 0 24px rgba(125,227,255,.7); animation: bob 2.4s ease-in-out infinite;
+  .ar-drop .spin { margin: 0 auto; animation: bob 2.4s ease-in-out infinite; }
+  .ar-drop.inrange .spin-face img, .ar-drop.inrange .spin-face video,
+  .ar-drop.inrange .spin-face .noface {
+    filter: drop-shadow(0 0 14px rgba(125, 255, 176, .9));
   }
-  .ar-drop.inrange .spin { box-shadow: 0 0 34px rgba(125,255,176,.95); }
   .ar-drop .label {
     margin-top: 6px; font-size: 12px; font-weight: 700; color: #fff;
     background: rgba(11,15,30,.72); border-radius: 8px; padding: 3px 8px; display: inline-block;
