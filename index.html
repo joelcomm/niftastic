@@ -365,12 +365,21 @@ function useCompass(active) {
 
   React.useEffect(() => {
     if (!active) return;
-    if (typeof DeviceOrientationEvent !== "undefined" &&
-        typeof DeviceOrientationEvent.requestPermission === "function") {
-      setNeedsPermission(true); // iOS requires a user gesture
-    } else {
+    const attach = () => {
       window.addEventListener("deviceorientationabsolute", handler, true);
       window.addEventListener("deviceorientation", handler, true);
+    };
+    if (typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function") {
+      // iOS remembers a previous grant: this silent call resolves "granted"
+      // with no prompt on every visit after the first. Only a true first
+      // visit rejects, and only then do we show the Enable button (a user
+      // gesture is required for the real permission prompt).
+      DeviceOrientationEvent.requestPermission()
+        .then(res => { if (res === "granted") attach(); else setNeedsPermission(true); })
+        .catch(() => setNeedsPermission(true));
+    } else {
+      attach();
     }
     return () => {
       window.removeEventListener("deviceorientationabsolute", handler, true);
