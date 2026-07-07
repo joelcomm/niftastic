@@ -3,13 +3,14 @@ main = "src/index.js"
 compatibility_date = "2026-07-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Create the namespace first:  npx wrangler kv namespace create DROPS
-# then paste the generated id below.
-[[kv_namespaces]]
-binding = "DROPS"
-id = "91ece4cd1a6343e99a4719be5ebfdcf2"
+# Drop/pool/capture storage. Apply schema with:
+#   npx wrangler d1 execute niftastic-drops --file schema.sql --remote
+[[d1_databases]]
+binding = "DB"
+database_name = "niftastic-drops"
+database_id = "84d336a1-31c0-4f16-b38f-5be965acd83b"
 
 # Secrets (set via CLI, never committed):
-#   npx wrangler secret put WAX_PRIVATE_KEY   — active key of the minter account
+#   npx wrangler secret put WAX_PRIVATE_KEY   — active key of the vault account
 #   npx wrangler secret put API_SECRET        — shared secret the game client sends
 #   npx wrangler secret put ADMIN_SECRET      — secret for the admin drop tool

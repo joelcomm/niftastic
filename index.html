@@ -37,6 +37,17 @@
   .btn.secondary { background: #232a4d; color: #eef1ff; box-shadow: none; }
   .hint { font-size: 13px; color: #6b7399; max-width: 280px; line-height: 1.5; }
   .err { color: #ff8b8b; font-size: 14px; max-width: 300px; line-height: 1.4; }
+  .teaser { background: #141a38; border: 1px solid #2c3566; border-radius: 14px;
+    padding: 12px 18px; font-size: 14.5px; max-width: 320px; line-height: 1.5; }
+  .toast {
+    position: fixed; top: calc(env(safe-area-inset-top, 0px) + 64px); left: 50%;
+    transform: translateX(-50%); background: #173a2a; color: #7dffb0;
+    border: 1px solid #2a5c44; border-radius: 999px; padding: 10px 18px;
+    font-size: 14px; font-weight: 700; z-index: 30; white-space: nowrap;
+    box-shadow: 0 6px 24px rgba(0,0,0,.4); animation: toastIn .3s ease;
+  }
+  @keyframes toastIn { from { opacity: 0; transform: translate(-50%, -8px); }
+    to { opacity: 1; transform: translate(-50%, 0); } }
 
   /* ---------- Header / nav ---------- */
   .header {
@@ -57,6 +68,18 @@
   .tab.active { color: #7de3ff; border-top-color: #7de3ff; }
   .main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
+  /* ---------- 3D spinning NFT card ---------- */
+  .spin { perspective: 800px; flex-shrink: 0; }
+  .spin-inner { position: relative; width: 100%; height: 100%; transform-style: preserve-3d;
+    animation: spinY var(--spin-speed, 6s) linear infinite; }
+  .spin-face { position: absolute; inset: 0; border-radius: 14px; overflow: hidden;
+    backface-visibility: hidden; -webkit-backface-visibility: hidden; background: #0b0f1e; }
+  .spin-face img, .spin-face video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .spin-face.back { transform: rotateY(180deg); }
+  .spin-face .noface { width: 100%; height: 100%; display: flex; align-items: center;
+    justify-content: center; font-size: 42px; background: #232a4d; }
+  @keyframes spinY { from { transform: rotateY(0deg); } to { transform: rotateY(360deg); } }
+
   /* ---------- Hunt ---------- */
   .hunt { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
   .radar-wrap { display: flex; justify-content: center; }
@@ -67,9 +90,7 @@
     display: flex; align-items: center; gap: 14px; background: #141a38;
     border: 1px solid #232a4d; border-radius: 16px; padding: 12px;
   }
-  .drop-card img { width: 64px; height: 64px; border-radius: 12px; object-fit: cover; background: #0b0f1e; }
-  .drop-card .noimg { width: 64px; height: 64px; border-radius: 12px; background: #232a4d;
-    display: flex; align-items: center; justify-content: center; font-size: 28px; }
+  .drop-card .spin { width: 64px; height: 64px; }
   .drop-info { flex: 1; min-width: 0; }
   .drop-info .name { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .drop-info .meta { font-size: 12.5px; color: #9aa3c7; margin-top: 3px; }
@@ -89,19 +110,17 @@
 
   /* ---------- AR ---------- */
   .ar { position: fixed; inset: 0; background: #000; z-index: 20; }
-  .ar video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .ar video.camera { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
   .ar-overlay { position: absolute; inset: 0; overflow: hidden; }
   .ar-drop {
     position: absolute; transform: translate(-50%, -50%); text-align: center;
     transition: left .15s linear, top .2s ease; cursor: pointer;
   }
-  .ar-drop img, .ar-drop .noimg {
-    border-radius: 16px; object-fit: cover; background: rgba(11,15,30,.5);
+  .ar-drop .spin {
+    margin: 0 auto; border-radius: 16px;
     box-shadow: 0 0 24px rgba(125,227,255,.7); animation: bob 2.4s ease-in-out infinite;
   }
-  .ar-drop .noimg { display: flex; align-items: center; justify-content: center; }
-  .ar-drop.inrange img, .ar-drop.inrange .noimg {
-    box-shadow: 0 0 34px rgba(125,255,176,.95); }
+  .ar-drop.inrange .spin { box-shadow: 0 0 34px rgba(125,255,176,.95); }
   .ar-drop .label {
     margin-top: 6px; font-size: 12px; font-weight: 700; color: #fff;
     background: rgba(11,15,30,.72); border-radius: 8px; padding: 3px 8px; display: inline-block;
@@ -131,9 +150,8 @@
   .inv { padding: 16px; }
   .inv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
   .inv-card { background: #141a38; border: 1px solid #232a4d; border-radius: 16px; overflow: hidden; }
-  .inv-card img { width: 100%; aspect-ratio: 1; object-fit: cover; background: #0b0f1e; display: block; }
-  .inv-card .noimg { width: 100%; aspect-ratio: 1; display: flex; align-items: center;
-    justify-content: center; font-size: 40px; background: #0b0f1e; }
+  .inv-card .spin { width: 100%; aspect-ratio: 1; }
+  .inv-card .spin-face { border-radius: 0; }
   .inv-card .name { padding: 10px 10px 2px; font-size: 13.5px; font-weight: 700;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .inv-card .mint { padding: 0 10px 10px; font-size: 11.5px; color: #9aa3c7; }
@@ -144,7 +162,7 @@
     display: flex; align-items: center; justify-content: center; padding: 28px; }
   .modal { background: #141a38; border: 1px solid #2c3566; border-radius: 22px; padding: 26px;
     text-align: center; max-width: 340px; width: 100%; }
-  .modal img { width: 140px; height: 140px; border-radius: 18px; object-fit: cover;
+  .modal .spin { width: 140px; height: 140px; margin: 0 auto; border-radius: 18px;
     box-shadow: 0 0 40px rgba(125,255,176,.5); }
   .modal h2 { margin: 14px 0 6px; font-size: 22px; }
   .modal p { color: #9aa3c7; font-size: 14px; line-height: 1.5; word-break: break-all; }
@@ -224,6 +242,32 @@ function angleDiff(a, b) { // shortest signed difference a-b in [-180, 180]
 
 function fmtDistance(m) {
   return m >= 1000 ? (m / 1000).toFixed(1) + " km" : Math.round(m) + " m";
+}
+
+/* ============================================================
+   3D spinning NFT card — front/back faces, video-aware.
+   One-sided NFTs show the same face front and back; two-sided
+   show front + back; mp4 NFTs play as they spin.
+   ============================================================ */
+function SpinCard({ image, backImage, video, size, speed, style }) {
+  const vidSrc = normalizeImage(video);
+  const imgSrc = normalizeImage(image);
+  const backSrc = normalizeImage(backImage) || imgSrc;
+  const dims = typeof size === "number" ? { width: size, height: size } : {};
+  const face = (src, isVideo) =>
+    isVideo ? <video src={src} autoPlay loop muted playsInline />
+    : src ? <img src={src} alt="" loading="lazy" />
+    : <div className="noface">🎁</div>;
+  return (
+    <div className="spin" style={{ ...dims, ...style, "--spin-speed": (speed || 6) + "s" }}>
+      <div className="spin-inner">
+        <div className="spin-face front">{face(vidSrc || imgSrc, Boolean(vidSrc))}</div>
+        <div className="spin-face back">
+          {backSrc ? face(backSrc, false) : face(vidSrc, Boolean(vidSrc))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* ============================================================
@@ -340,19 +384,26 @@ function useCompass(active) {
 /* ============================================================
    Drops (from the Worker)
    ============================================================ */
-function useDrops(pos) {
+function useDrops(pos, account) {
   const [drops, setDrops] = React.useState([]);
   const [fetchError, setFetchError] = React.useState(null);
+  const [spawnNotice, setSpawnNotice] = React.useState(null);
 
   React.useEffect(() => {
     if (!pos) return;
     let cancelled = false;
     const load = async () => {
       try {
-        const res = await fetch(`${WAX_CONFIG.workerBase}/drops?lat=${pos.lat}&lng=${pos.lng}`);
+        const acct = account ? `&account=${account}` : "";
+        const res = await fetch(
+          `${WAX_CONFIG.workerBase}/drops?lat=${pos.lat}&lng=${pos.lng}${acct}`);
         if (!res.ok) throw new Error("HTTP " + res.status);
         const body = await res.json();
-        if (!cancelled) { setDrops(body.drops || []); setFetchError(null); }
+        if (!cancelled) {
+          setDrops(body.drops || []);
+          setFetchError(null);
+          if (body.spawned > 0) setSpawnNotice({ count: body.spawned, at: Date.now() });
+        }
       } catch (e) {
         if (!cancelled) setFetchError("Could not load nearby drops.");
       }
@@ -360,9 +411,9 @@ function useDrops(pos) {
     load();
     const timer = setInterval(load, WAX_CONFIG.dropsRefreshMs);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [pos && Math.round(pos.lat * 5000), pos && Math.round(pos.lng * 5000)]);
+  }, [pos && Math.round(pos.lat * 5000), pos && Math.round(pos.lng * 5000), account]);
 
-  return { drops, fetchError };
+  return { drops, fetchError, spawnNotice };
 }
 
 async function captureDrop(account, drop, pos) {
@@ -486,7 +537,7 @@ function ARView({ drops, pos, account, onClose, onCaptured }) {
 
   return (
     <div className="ar">
-      <video ref={videoRef} playsInline muted autoPlay />
+      <video ref={videoRef} className="camera" playsInline muted autoPlay />
       <div className="ar-overlay">
         {visible.map(d => {
           const size = Math.max(48, Math.min(170, 9000 / Math.max(d.distance, 40)));
@@ -498,9 +549,8 @@ function ARView({ drops, pos, account, onClose, onCaptured }) {
               className={"ar-drop" + (inRange ? " inrange" : "")}
               style={{ left: x, top: y }}
               onClick={() => inRange && tryCapture(d)}>
-              {d.image
-                ? <img src={normalizeImage(d.image)} style={{ width: size, height: size }} alt={d.name} />
-                : <div className="noimg" style={{ width: size, height: size, fontSize: size * 0.5 }}>🎁</div>}
+              <SpinCard image={d.image} backImage={d.backImage} video={d.video}
+                size={size} speed={4} />
               <div className="label">
                 {d.name} · {fmtDistance(d.distance)}{inRange ? " — TAP!" : ""}
               </div>
@@ -564,7 +614,9 @@ function Inventory({ account, refreshKey }) {
           if (!cancelled) setAssets((body.data || []).map(a => ({
             id: a.asset_id,
             name: (a.data && a.data.name) || (a.template && a.template.immutable_data && a.template.immutable_data.name) || "Unnamed",
-            image: normalizeImage(a.data && a.data.img),
+            image: (a.data && a.data.img) || null,
+            backImage: (a.data && a.data.backimg) || null,
+            video: (a.data && a.data.video) || null,
             mint: a.template_mint,
           })));
           return;
@@ -587,7 +639,7 @@ function Inventory({ account, refreshKey }) {
       <div className="inv-grid">
         {assets.map(a => (
           <div className="inv-card" key={a.id}>
-            {a.image ? <img src={a.image} alt={a.name} loading="lazy" /> : <div className="noimg">🎴</div>}
+            <SpinCard image={a.image} backImage={a.backImage} video={a.video} speed={8} />
             <div className="name">{a.name}</div>
             <div className="mint">{a.mint ? "Mint #" + a.mint : "#" + a.id}</div>
           </div>
@@ -603,13 +655,36 @@ function Inventory({ account, refreshKey }) {
 function App() {
   const { account, error: waxError, ready, login } = useWax();
   const { pos, geoError } = useGeolocation();
-  const { drops, fetchError } = useDrops(account ? pos : null);
+  const { drops, fetchError, spawnNotice } = useDrops(account ? pos : null, account);
   const { heading } = useCompass(Boolean(account));
   const [tab, setTab] = React.useState("hunt");
   const [arOpen, setArOpen] = React.useState(false);
   const [captureResult, setCaptureResult] = React.useState(null);
   const [busyDrop, setBusyDrop] = React.useState(null);
   const [invKey, setInvKey] = React.useState(0);
+  const [toast, setToast] = React.useState(null);
+  const [teaser, setTeaser] = React.useState(null);
+
+  // "N new NFTs just appeared nearby" toast when the server auto-spawns.
+  React.useEffect(() => {
+    if (!spawnNotice) return;
+    setToast(spawnNotice.count === 1
+      ? "✨ An NFT just appeared nearby!"
+      : `✨ ${spawnNotice.count} NFTs just appeared nearby!`);
+    const t = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [spawnNotice && spawnNotice.at]);
+
+  // Pre-login teaser: peek at public drops near the visitor.
+  React.useEffect(() => {
+    if (account || !pos) return;
+    let cancelled = false;
+    fetch(`${WAX_CONFIG.workerBase}/drops?lat=${pos.lat}&lng=${pos.lng}`)
+      .then(r => r.json())
+      .then(b => { if (!cancelled) setTeaser((b.drops || []).length); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [account, pos && Math.round(pos.lat * 5000)]);
 
   const handleCaptured = ({ drop, result, error }) => {
     setArOpen(false);
@@ -639,8 +714,16 @@ function App() {
     <div className="screen login">
       <div className="logo">Niftastic</div>
       <div className="tagline">Hunt real-world locations for NFTs on the WAX blockchain — find them, tap them, own them.</div>
+      <div className="teaser">
+        {teaser === null
+          ? "📍 Checking your area for hidden NFTs…"
+          : teaser > 0
+            ? `👀 ${teaser} NFT${teaser === 1 ? " is" : "s are"} hiding within 5 km of you right now.`
+            : "🎁 Sign in and your first NFT will appear near you — guaranteed."}
+      </div>
       <button className="btn" onClick={login}>Sign in with WAX Cloud Wallet</button>
-      <div className="hint">No wallet? One is created for you, free, during sign-in.</div>
+      <div className="hint">No wallet? One is created for you, free, during sign-in.
+        Your location is only used to find NFTs around you — we never store where you've been.</div>
       {waxError && <div className="err">{waxError}</div>}
     </div>
   );
@@ -651,6 +734,8 @@ function App() {
         <div className="brand">Niftastic</div>
         <div className="account">{account}</div>
       </div>
+
+      {toast && <div className="toast">{toast}</div>}
 
       <div className="main">
         {tab === "hunt" && (
@@ -667,9 +752,7 @@ function App() {
               const inRange = d.distance <= d.captureRadius;
               return (
                 <div className="drop-card" key={d.id}>
-                  {d.image
-                    ? <img src={normalizeImage(d.image)} alt={d.name} />
-                    : <div className="noimg">🎁</div>}
+                  <SpinCard image={d.image} backImage={d.backImage} video={d.video} size={64} />
                   <div className="drop-info">
                     <div className="name">{d.name}</div>
                     <div className="meta">
@@ -715,9 +798,9 @@ function App() {
               </React.Fragment>
             ) : (
               <React.Fragment>
-                {captureResult.drop.image
-                  ? <img src={normalizeImage(captureResult.drop.image)} alt={captureResult.drop.name} />
-                  : <div style={{ fontSize: 90 }}>🎉</div>}
+                <SpinCard image={captureResult.drop.image}
+                  backImage={captureResult.drop.backImage}
+                  video={captureResult.drop.video} size={140} speed={3} />
                 <h2>Captured!</h2>
                 <p><b>{captureResult.drop.name}</b> has been transferred to your WAX wallet.</p>
                 <p style={{ fontSize: 11 }}>tx: {captureResult.result.transaction_id}</p>

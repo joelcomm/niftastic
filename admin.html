@@ -97,6 +97,10 @@
     <div class="field"><label>Name</label><input id="name" placeholder="auto-filled from template" /></div>
     <div class="field"><label>Image (IPFS hash or URL)</label><input id="image" placeholder="auto-filled from template" /></div>
     <div class="row">
+      <div class="field"><label>Back image (optional)</label><input id="backimage" placeholder="auto-filled" /></div>
+      <div class="field"><label>Video (optional, mp4)</label><input id="video" placeholder="auto-filled" /></div>
+    </div>
+    <div class="row">
       <div class="field"><label>Quantity</label><input id="quantity" type="number" value="10" min="1" /></div>
       <div class="field"><label>Capture radius (m)</label><input id="radius" type="number" value="50" min="10" /></div>
     </div>
@@ -114,6 +118,12 @@
         oninput="renderVault()" autocomplete="off" />
     </div>
     <div class="vault-list" id="vaultList"><div class="hint">Loading vault contents…</div></div>
+    <hr />
+    <h2>Spawn Pool (<span id="poolCount">0</span>)</h2>
+    <div class="hint">Templates that auto-spawn around players worldwide. Higher weight = more
+      common. Use the <b>+Pool</b> button on vault items to add. Budgets: max 200 spawn events/day
+      globally, 5 per player, one per km²-cell per hour; spawns expire after 48 h.</div>
+    <div id="poolList"></div>
     <hr />
     <h2>Active Drops (<span id="count">0</span>)</h2>
     <div id="dropList"></div>
@@ -204,6 +214,7 @@ async function connect() {
     localStorage.setItem("niftasticAdmin", JSON.stringify({ base, secret }));
     setMsg("Connected — " + body.drops.length + " drops loaded.", true);
     renderDrops(body.drops);
+    loadPool();
     updateCreateBtn();
   } catch (e) {
     setMsg("Could not reach the worker: " + e.message, false);
@@ -224,6 +235,10 @@ async function lookupTemplate() {
       document.getElementById("name").value = data.name;
     if (data.img && !document.getElementById("image").value)
       document.getElementById("image").value = data.img;
+    if (data.backimg && !document.getElementById("backimage").value)
+      document.getElementById("backimage").value = data.backimg;
+    if (data.video && !document.getElementById("video").value)
+      document.getElementById("video").value = data.video;
     // How many copies does the vault actually hold?
     const stockRes = await fetch(
       `${ATOMIC_API}/atomicassets/v1/assets?owner=${VAULT_ACCOUNT}&template_id=${id}&limit=500`);
@@ -249,6 +264,8 @@ async function createDrop() {
     template_id: document.getElementById("template").value.trim(),
     collection_name: document.getElementById("collection").value.trim() || null,
     image: document.getElementById("image").value.trim() || null,
+    back_image: document.getElementById("backimage").value.trim() || null,
+    video: document.getElementById("video").value.trim() || null,
     lat: parseFloat(document.getElementById("lat").value),
     lng: parseFloat(document.getElementById("lng").value),
     quantity: parseInt(document.getElementById("quantity").value, 10),
@@ -380,6 +397,8 @@ async function loadVault() {
           template_id: String(tpl),
           name: (a.data && a.data.name) || "Unnamed",
           img: (a.data && a.data.img) || null,
+          backimg: (a.data && a.data.backimg) || null,
+          video: (a.data && a.data.video) || null,
           count: 1,
         });
       });
@@ -414,8 +433,15 @@ function renderVault() {
     const img = normalizeImage(t.img);
     el.innerHTML = `
       ${img ? `<img src="${img}" alt="" loading="lazy">` : `<div style="width:34px;height:34px;border-radius:7px;background:#232a4d;display:flex;align-items:center;justify-content:center">🎁</div>`}
-      <div class="vname">${t.name}<div class="vmeta">${t.collection} · tpl ${t.template_id}</div></div>
+      <div class="vname">${t.name}<div class="vmeta">${t.collection} · tpl ${t.template_id}${t.video ? " · 🎬" : ""}${t.backimg ? " · 🔄" : ""}</div></div>
       <div class="vcount">×${t.count}</div>`;
+    const poolBtn = document.createElement("button");
+    poolBtn.className = "danger";
+    poolBtn.style.cssText = "background:#1a2f4d;color:#7de3ff";
+    poolBtn.textContent = "+Pool";
+    poolBtn.title = "Add to the auto-spawn pool";
+    poolBtn.onclick = (e) => { e.stopPropagation(); addToPool(t); };
+    el.appendChild(poolBtn);
     el.onclick = () => pickVaultItem(t);
     list.appendChild(el);
   });
@@ -426,9 +452,96 @@ function pickVaultItem(t) {
   document.getElementById("template").value = t.template_id;
   document.getElementById("name").value = t.name;
   document.getElementById("image").value = t.img || "";
+  document.getElementById("backimage").value = t.backimg || "";
+  document.getElementById("video").value = t.video || "";
   const qty = document.getElementById("quantity");
   if (parseInt(qty.value, 10) > t.count || !qty.value) qty.value = t.count;
   setMsg(`Selected ${t.name} — vault holds ${t.count}. Now click the map to set the location.`, true);
+}
+
+/* ---------- Spawn pool ---------- */
+async function loadPool() {
+  const { base, secret } = cfg();
+  const res = await fetch(base + "/admin/pool", { headers: { "X-Admin-Secret": secret } });
+  if (!res.ok) return;
+  renderPool((await res.json()).pool);
+}
+
+function renderPool(pool) {
+  document.getElementById("poolCount").textContent = pool.length;
+  const list = document.getElementById("poolList");
+  list.innerHTML = "";
+  if (!pool.length) {
+    list.innerHTML = '<div class="hint">Pool is empty — nothing auto-spawns. Add vault NFTs with +Pool.</div>';
+    return;
+  }
+  pool.forEach(p => {
+    const el = document.createElement("div");
+    el.className = "drop-item";
+    if (!p.enabled) el.style.opacity = 0.45;
+    const img = normalizeImage(p.image);
+    el.innerHTML = `
+      ${img ? `<img src="${img}" alt="">` : `<div style="width:40px;height:40px;border-radius:8px;background:#232a4d;display:flex;align-items:center;justify-content:center">🎁</div>`}
+      <div class="info">
+        <div class="name">${p.name || p.template_id}</div>
+        <div class="meta">${p.collection_name || ""} · tpl ${p.template_id}${p.video ? " · 🎬" : ""}${p.back_image ? " · 🔄" : ""}</div>
+      </div>`;
+    const weight = document.createElement("input");
+    weight.type = "number"; weight.value = p.weight; weight.min = 1;
+    weight.title = "Rarity weight — higher spawns more often";
+    weight.style.cssText = "width:58px;background:#0b0f1e;border:1px solid #232a4d;color:#eef1ff;border-radius:8px;padding:6px";
+    weight.onchange = () => upsertPool({ ...p, weight: parseInt(weight.value, 10) || 1 });
+    const toggle = document.createElement("button");
+    toggle.className = "danger";
+    toggle.style.cssText = p.enabled ? "background:#173a2a;color:#7dffb0" : "";
+    toggle.textContent = p.enabled ? "On" : "Off";
+    toggle.onclick = () => upsertPool({ ...p, enabled: !p.enabled });
+    const del = document.createElement("button");
+    del.className = "danger"; del.textContent = "✕";
+    del.title = "Remove from pool";
+    del.onclick = async () => {
+      const { base, secret } = cfg();
+      await fetch(`${base}/admin/pool/${p.template_id}`, { method: "DELETE", headers: { "X-Admin-Secret": secret } });
+      loadPool();
+    };
+    el.append(weight, toggle, del);
+    list.appendChild(el);
+  });
+}
+
+async function upsertPool(entry) {
+  const { base, secret } = cfg();
+  const res = await fetch(base + "/admin/pool", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Admin-Secret": secret },
+    body: JSON.stringify({
+      template_id: entry.template_id,
+      collection_name: entry.collection_name,
+      name: entry.name,
+      image: entry.image,
+      back_image: entry.back_image,
+      video: entry.video,
+      weight: entry.weight,
+      enabled: Boolean(entry.enabled),
+    }),
+  });
+  if (!res.ok) setMsg("Pool update failed.", false);
+  loadPool();
+}
+
+function addToPool(t) {
+  if (!connected) { setMsg("Connect to the worker first.", false); return; }
+  upsertPool({
+    template_id: t.template_id,
+    collection_name: t.collection,
+    name: t.name,
+    image: t.img,
+    back_image: t.backimg,
+    video: t.video,
+    weight: 10,
+    enabled: true,
+  });
+  setMsg(`${t.name} added to the spawn pool (weight 10).`, true);
 }
 
 initMap();
