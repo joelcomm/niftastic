@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS pool (
   guarantee INTEGER NOT NULL DEFAULT 0 -- 1 = guaranteed once per player, excluded from ambient spawns
 );
 
--- Every successful capture (also powers once-per-player and starter logic).
+-- Every successful capture (also powers once-per-player, guaranteed drops,
+-- and the impossible-travel velocity gate).
 CREATE TABLE IF NOT EXISTS captures (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   account TEXT NOT NULL,
@@ -48,9 +49,22 @@ CREATE TABLE IF NOT EXISTS captures (
   template_id TEXT,
   asset_id TEXT,
   tx_id TEXT,
+  lat REAL,
+  lng REAL,
+  ip_country TEXT,  -- Cloudflare IP-derived country at claim time (evidence only)
+  as_org TEXT,      -- Cloudflare IP network owner at claim time (evidence only)
   created TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_captures_account ON captures(account);
+
+-- Fraud signals for review (impossible travel etc.).
+CREATE TABLE IF NOT EXISTS fraud_flags (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  detail TEXT,
+  created TEXT NOT NULL
+);
 
 -- Cached OSM road/water geometry per ~1km cell (30-day TTL in code).
 CREATE TABLE IF NOT EXISTS geo_cache (

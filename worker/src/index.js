@@ -48,6 +48,14 @@ const STARTER_TTL_HOURS = 72;
 const rateLimit = new Map();
 const RATE_WINDOW_MS = 30_000;
 
+// ---- Impossible-travel gate ----
+// Above airliner cruise speed = teleporting (GPS spoof / VPN relocation).
+const MAX_TRAVEL_SPEED_KMH = 800;
+// Ignore jumps below this distance — GPS jitter between nearby fixes can
+// briefly imply absurd speeds without any fraud.
+const MIN_TELEPORT_KM = 10;
+const fraudFlagCooldown = new Map(); // account:kind -> ts, avoids flag spam from polling
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
@@ -133,6 +141,39 @@ async function activeDropsNear(env, lat, lng, meters, account) {
     .map((d) => ({ ...d, distance: Math.round(haversineMeters(lat, lng, d.lat, d.lng)) }))
     .filter((d) => d.distance <= meters)
     .sort((a, b2) => a.distance - b2.distance);
+}
+
+// Compare a claimed position against the account's most recent capture.
+// Returns violation details if the implied travel speed is impossible.
+async function travelViolation(env, account, lat, lng) {
+  const last = await env.DB.prepare(
+    "SELECT lat, lng, created FROM captures WHERE account = ? AND lat IS NOT NULL ORDER BY id DESC LIMIT 1"
+  ).bind(account).first();
+  if (!last) return null;
+  const km = haversineMeters(lat, lng, last.lat, last.lng) / 1000;
+  if (km < MIN_TELEPORT_KM) return null;
+  const hours = Math.max((Date.now() - Date.parse(last.created)) / 3600_000, 1 / 3600);
+  const speedKmh = km / hours;
+  if (speedKmh <= MAX_TRAVEL_SPEED_KMH) return null;
+  return {
+    km: Math.round(km),
+    minutes: Math.round(hours * 60),
+    speed_kmh: Math.round(speedKmh),
+    from: { lat: last.lat, lng: last.lng },
+    to: { lat, lng },
+  };
+}
+
+async function flagFraud(env, account, kind, detail) {
+  const key = account + ":" + kind;
+  const last = fraudFlagCooldown.get(key);
+  if (last && Date.now() - last < 10 * 60_000) return; // one flag per account/kind/10min
+  fraudFlagCooldown.set(key, Date.now());
+  try {
+    await env.DB.prepare(
+      "INSERT INTO fraud_flags (account, kind, detail, created) VALUES (?,?,?,?)"
+    ).bind(account, kind, JSON.stringify(detail), new Date().toISOString()).run();
+  } catch { /* flagging must never break gameplay */ }
 }
 
 async function alreadyOwns(env, account, templateId) {
@@ -580,9 +621,15 @@ async function handleNearbyDrops(url, env) {
   let spawned = 0;
   if (isValidWaxAccount(account) && account !== VAULT_ACCOUNT) {
     try {
-      const activeClose = await activeDropsNear(env, lat, lng, SPAWN_CHECK_RADIUS_M, account);
-      spawned += await maybeGuaranteed(env, lat, lng, account);
-      spawned += await maybeSpawn(env, lat, lng, account, activeClose.length + spawned);
+      // Teleporting accounts can still LOOK at drops, but nothing spawns for them.
+      const violation = await travelViolation(env, account, lat, lng);
+      if (violation) {
+        await flagFraud(env, account, "impossible_travel_spawn", violation);
+      } else {
+        const activeClose = await activeDropsNear(env, lat, lng, SPAWN_CHECK_RADIUS_M, account);
+        spawned += await maybeGuaranteed(env, lat, lng, account);
+        spawned += await maybeSpawn(env, lat, lng, account, activeClose.length + spawned);
+      }
     } catch { /* spawning must never break the drops feed */ }
   }
 
@@ -615,6 +662,20 @@ async function handleCapture(request, env) {
     return json({ error: "too many attempts, slow down" }, 429);
   }
   rateLimit.set(rlKey, Date.now());
+
+  // Physics check: nobody claims from two distant cities in minutes.
+  const violation = await travelViolation(env, account, lat, lng);
+  if (violation) {
+    await flagFraud(env, account, "impossible_travel_capture", violation);
+    return json(
+      {
+        error: "impossible travel detected — captures from this location are blocked",
+        distance_km: violation.km,
+        minutes_since_last_claim: violation.minutes,
+      },
+      403
+    );
+  }
 
   const now = new Date().toISOString();
   const drop = await env.DB.prepare("SELECT * FROM drops WHERE id = ?").bind(dropId).first();
@@ -672,9 +733,13 @@ async function handleCapture(request, env) {
     return json({ error: isMint ? "mint failed" : "transfer failed", detail: String(err.message || err) }, 502);
   }
 
+  const cf = request.cf || {};
   await env.DB.prepare(
-    "INSERT INTO captures (account, drop_id, template_id, asset_id, tx_id, created) VALUES (?,?,?,?,?,?)"
-  ).bind(account, dropId, drop.template_id, assetId, result.transaction_id, now).run();
+    "INSERT INTO captures (account, drop_id, template_id, asset_id, tx_id, lat, lng, ip_country, as_org, created) VALUES (?,?,?,?,?,?,?,?,?,?)"
+  ).bind(
+    account, dropId, drop.template_id, assetId, result.transaction_id,
+    lat, lng, cf.country || null, cf.asOrganization || null, now
+  ).run();
 
   return json({
     ok: true,
@@ -691,6 +756,15 @@ async function handleAdmin(request, url, env) {
 
   const parts = url.pathname.split("/").filter(Boolean); // ["admin", resource, maybe id]
   const resource = parts[1];
+
+  if (resource === "fraud" && request.method === "GET") {
+    const rows = (
+      await env.DB.prepare("SELECT * FROM fraud_flags ORDER BY id DESC LIMIT 200").all()
+    ).results;
+    return json({
+      flags: rows.map((r) => ({ ...r, detail: r.detail ? JSON.parse(r.detail) : null })),
+    });
+  }
 
   if (resource === "geodebug" && request.method === "GET") {
     if (url.searchParams.get("echo")) {
