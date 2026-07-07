@@ -28,7 +28,7 @@ const WAX_RPC = "https://wax.greymass.com";
 const ATOMIC_API = "https://wax.api.atomicassets.io";
 const VAULT_ACCOUNT = "boxinventory";
 
-const GPS_SLACK_METERS = 30;
+const GPS_SLACK_METERS = 10; // GPS drift allowance on top of a drop's capture radius
 const NEARBY_METERS = 5000;
 
 // ---- Auto-spawn tuning ----
@@ -37,7 +37,7 @@ const MIN_ACTIVE_NEARBY = 3;       // target number of active drops around a pla
 const SPAWN_MIN_M = 50;            // spawned drops land between MIN and MAX meters away
 const SPAWN_MAX_M = 400;
 const SPAWN_TTL_HOURS = 48;        // uncaptured spawns expire
-const SPAWN_CAPTURE_RADIUS = 40;
+const SPAWN_CAPTURE_RADIUS = 10;
 const DAILY_GLOBAL_SPAWN_CAP = 200;    // max spawn triggers per UTC day, worldwide
 const DAILY_PLAYER_SPAWN_CAP = 5;      // max spawn triggers per account per UTC day
 const CELL_COOLDOWN_MINUTES = 60;      // min gap between spawn triggers in one ~1km cell
@@ -317,7 +317,7 @@ async function maybeStarter(env, lat, lng, account) {
       source: "starter",
       reservedFor: account,
       ttlHours: STARTER_TTL_HOURS,
-      captureRadius: 60,
+      captureRadius: 15, // slightly forgiving for a player's very first capture
     });
     await insertDrops(env, [drop]);
     return 1;
