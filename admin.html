@@ -498,8 +498,16 @@ function renderPool(pool) {
       ${img ? `<img src="${img}" alt="">` : `<div style="width:40px;height:40px;border-radius:8px;background:#232a4d;display:flex;align-items:center;justify-content:center">🎁</div>`}
       <div class="info">
         <div class="name">${p.name || p.template_id}</div>
-        <div class="meta">${p.collection_name || ""} · tpl ${p.template_id}${p.distribution === "mint" ? " · 🏭 mint" : " · 📦 vault"}${p.video ? " · 🎬" : ""}${p.back_image ? " · 🔄" : ""}</div>
+        <div class="meta">${p.collection_name || ""} · tpl ${p.template_id}${p.distribution === "mint" ? " · 🏭 mint" : " · 📦 vault"}${p.guarantee ? " · ⭐ 1/player" : ""}${p.video ? " · 🎬" : ""}${p.back_image ? " · 🔄" : ""}</div>
       </div>`;
+    const star = document.createElement("button");
+    star.className = "danger";
+    star.style.cssText = p.guarantee ? "background:#3a331a;color:#ffd88b" : "";
+    star.textContent = "⭐";
+    star.title = p.guarantee
+      ? "Guaranteed one per player (excluded from random spawns) — click to make it a normal random spawn"
+      : "Random ambient spawn — click to make it guaranteed once per player";
+    star.onclick = () => upsertPool({ ...p, guarantee: !p.guarantee });
     const dist = document.createElement("button");
     dist.className = "danger";
     dist.style.cssText = p.distribution === "mint" ? "background:#2f2a1a;color:#ffd88b" : "background:#1a2f4d;color:#7de3ff";
@@ -537,7 +545,7 @@ function renderPool(pool) {
       await fetch(`${base}/admin/pool/${p.template_id}`, { method: "DELETE", headers: { "X-Admin-Secret": secret } });
       loadPool();
     };
-    el.append(dist, weight, toggle, del);
+    el.append(star, dist, weight, toggle, del);
     list.appendChild(el);
   });
 }
@@ -558,6 +566,7 @@ async function upsertPool(entry) {
       enabled: Boolean(entry.enabled),
       distribution: entry.distribution || "transfer",
       schema_name: entry.schema_name || null,
+      guarantee: Boolean(entry.guarantee),
     }),
   });
   if (!res.ok) setMsg("Pool update failed.", false);

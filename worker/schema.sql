@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS pool (
   weight INTEGER NOT NULL DEFAULT 10,
   enabled INTEGER NOT NULL DEFAULT 1,
   distribution TEXT NOT NULL DEFAULT 'transfer', -- 'transfer' | 'mint'
-  schema_name TEXT
+  schema_name TEXT,
+  guarantee INTEGER NOT NULL DEFAULT 0 -- 1 = guaranteed once per player, excluded from ambient spawns
 );
 
 -- Every successful capture (also powers once-per-player and starter logic).

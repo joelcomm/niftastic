@@ -298,8 +298,9 @@ async function maybeSpawn(env, lat, lng, account, nearbyActiveCount) {
   if (playerCount.n >= DAILY_PLAYER_SPAWN_CAP) return 0;
   if (cellRecent.n > 0) return 0;
 
+  // Guaranteed one-per-player templates are handled separately, never ambient.
   const pool = (
-    await env.DB.prepare("SELECT * FROM pool WHERE enabled = 1").all()
+    await env.DB.prepare("SELECT * FROM pool WHERE enabled = 1 AND guarantee = 0").all()
   ).results;
   if (!pool.length) return 0;
 
@@ -324,44 +325,51 @@ async function maybeSpawn(env, lat, lng, account, nearbyActiveCount) {
   return drops.length;
 }
 
-// New players (zero captures) get one guaranteed, reserved, close-by drop.
-async function maybeStarter(env, lat, lng, account) {
-  const captured = await env.DB.prepare(
-    "SELECT 1 FROM captures WHERE account = ? LIMIT 1"
-  ).bind(account).first();
-  if (captured) return 0;
+// Guaranteed one-per-player templates (e.g. the Founders Badge): every account
+// that does not own one gets a reserved drop nearby. Once owned, never again.
+// In-memory cache of confirmed ownership avoids re-hitting the chain API on
+// every drops poll (resets on worker recycle, which is fine — it re-checks once).
+const ownedCache = new Map();
 
-  const now = new Date().toISOString();
-  const existing = await env.DB.prepare(
-    `SELECT 1 FROM drops WHERE reserved_for = ? AND ${ACTIVE_SQL} LIMIT 1`
-  ).bind(account, now).first();
-  if (existing) return 0;
-
-  // Prefer mint-on-demand templates for starters — they can never be out of stock,
-  // so every new player is guaranteed a first find.
-  const pool = (
-    await env.DB.prepare(
-      "SELECT * FROM pool WHERE enabled = 1 ORDER BY (distribution = 'mint') DESC, weight DESC LIMIT 5"
-    ).all()
+async function maybeGuaranteed(env, lat, lng, account) {
+  const entries = (
+    await env.DB.prepare("SELECT * FROM pool WHERE enabled = 1 AND guarantee = 1").all()
   ).results;
-  if (!pool.length) return 0;
+  let spawned = 0;
+  const now = new Date().toISOString();
 
-  for (const entry of pool) {
+  for (const entry of entries) {
+    // Already has a live reserved drop for this template? Nothing to do.
+    const existing = await env.DB.prepare(
+      `SELECT 1 FROM drops WHERE reserved_for = ? AND template_id = ? AND ${ACTIVE_SQL} LIMIT 1`
+    ).bind(account, entry.template_id, now).first();
+    if (existing) continue;
+
+    const cacheKey = account + ":" + entry.template_id;
+    if (ownedCache.get(cacheKey)) continue;
+    if (await alreadyOwns(env, account, entry.template_id)) {
+      ownedCache.set(cacheKey, true);
+      continue;
+    }
+
+    // Vault-transfer guarantees need stock; mint ones never run dry.
     if (entry.distribution !== "mint") {
       try {
         if (!(await pickVaultAsset(entry.template_id))) continue;
       } catch { /* try it anyway */ }
     }
+
     const drop = dropFromPoolEntry(entry, randomPointNear(lat, lng, STARTER_MIN_M, STARTER_MAX_M), {
       source: "starter",
       reservedFor: account,
       ttlHours: STARTER_TTL_HOURS,
-      captureRadius: 15, // slightly forgiving for a player's very first capture
+      captureRadius: 15, // slightly forgiving — often a player's very first capture
     });
+    drop.once_per_player = 1;
     await insertDrops(env, [drop]);
-    return 1;
+    spawned++;
   }
-  return 0;
+  return spawned;
 }
 
 /* ============================================================
@@ -380,7 +388,7 @@ async function handleNearbyDrops(url, env) {
   if (isValidWaxAccount(account) && account !== VAULT_ACCOUNT) {
     try {
       const activeClose = await activeDropsNear(env, lat, lng, SPAWN_CHECK_RADIUS_M, account);
-      spawned += await maybeStarter(env, lat, lng, account);
+      spawned += await maybeGuaranteed(env, lat, lng, account);
       spawned += await maybeSpawn(env, lat, lng, account, activeClose.length + spawned);
     } catch { /* spawning must never break the drops feed */ }
   }
@@ -578,25 +586,27 @@ async function handleAdmin(request, url, env) {
         return json({ error: "invalid JSON body" }, 400);
       }
       const { template_id, collection_name, name, image, back_image, video, weight, enabled,
-        distribution, schema_name } = body || {};
+        distribution, schema_name, guarantee } = body || {};
       if (!template_id) return json({ error: "template_id required" }, 400);
       if (distribution === "mint" && (!collection_name || !schema_name)) {
         return json({ error: "mint entries require collection_name and schema_name" }, 400);
       }
       await env.DB.prepare(
         `INSERT INTO pool (template_id, collection_name, name, image, back_image, video, weight, enabled,
-           distribution, schema_name)
-         VALUES (?,?,?,?,?,?,?,?,?,?)
+           distribution, schema_name, guarantee)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(template_id) DO UPDATE SET
            collection_name=excluded.collection_name, name=excluded.name, image=excluded.image,
            back_image=excluded.back_image, video=excluded.video,
            weight=excluded.weight, enabled=excluded.enabled,
-           distribution=excluded.distribution, schema_name=excluded.schema_name`
+           distribution=excluded.distribution, schema_name=excluded.schema_name,
+           guarantee=excluded.guarantee`
       ).bind(
         String(template_id), collection_name || null, name || null, image || null,
         back_image || null, video || null,
         Math.max(1, Number(weight) || 10), enabled === false ? 0 : 1,
-        distribution === "mint" ? "mint" : "transfer", schema_name || null
+        distribution === "mint" ? "mint" : "transfer", schema_name || null,
+        guarantee ? 1 : 0
       ).run();
       return json({ ok: true }, 201);
     }
