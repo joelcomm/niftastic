@@ -109,6 +109,10 @@
     <div class="field"><label>Rarity label (optional)</label><input id="rarity" placeholder="e.g. Rare" /></div>
     <div class="field"><label><input id="oncePerPlayer" type="checkbox" style="width:auto;margin-right:6px" />
       One per player (skip if wallet already owns this template)</label></div>
+    <div class="field"><label><input id="mintOnDemand" type="checkbox" style="width:auto;margin-right:6px"
+      onchange="checkMintAuth()" />
+      Mint on demand — new copies are minted at capture instead of taken from the vault</label></div>
+    <input id="schema" type="hidden" />
     <button class="primary" id="createBtn" onclick="createDrop()" disabled>Place Drop</button>
     <div class="msg" id="msg"></div>
     <hr />
@@ -239,6 +243,8 @@ async function lookupTemplate() {
       document.getElementById("backimage").value = data.backimg;
     if (data.video && !document.getElementById("video").value)
       document.getElementById("video").value = data.video;
+    document.getElementById("schema").value =
+      (body.data.schema && body.data.schema.schema_name) || "";
     // How many copies does the vault actually hold?
     const stockRes = await fetch(
       `${ATOMIC_API}/atomicassets/v1/assets?owner=${VAULT_ACCOUNT}&template_id=${id}&limit=500`);
@@ -273,8 +279,14 @@ async function createDrop() {
     rarity: document.getElementById("rarity").value.trim() || null,
     oncePerPlayer: document.getElementById("oncePerPlayer").checked,
     scatter: parseInt(document.getElementById("scatter").value, 10) || 0,
+    distribution: document.getElementById("mintOnDemand").checked ? "mint" : "transfer",
+    schema_name: document.getElementById("schema").value.trim() || null,
   };
   if (!payload.name || !payload.template_id) { setMsg("Name and template ID are required.", false); return; }
+  if (payload.distribution === "mint" && !payload.schema_name) {
+    setMsg("Mint on demand needs the template's schema — click into Template ID so it can be looked up.", false);
+    return;
+  }
   try {
     const res = await fetch(base + "/admin/drops", {
       method: "POST",
@@ -399,6 +411,7 @@ async function loadVault() {
           img: (a.data && a.data.img) || null,
           backimg: (a.data && a.data.backimg) || null,
           video: (a.data && a.data.video) || null,
+          schema: (a.schema && a.schema.schema_name) || null,
           count: 1,
         });
       });
@@ -454,6 +467,7 @@ function pickVaultItem(t) {
   document.getElementById("image").value = t.img || "";
   document.getElementById("backimage").value = t.backimg || "";
   document.getElementById("video").value = t.video || "";
+  document.getElementById("schema").value = t.schema || "";
   const qty = document.getElementById("quantity");
   if (parseInt(qty.value, 10) > t.count || !qty.value) qty.value = t.count;
   setMsg(`Selected ${t.name} — vault holds ${t.count}. Now click the map to set the location.`, true);
@@ -484,8 +498,27 @@ function renderPool(pool) {
       ${img ? `<img src="${img}" alt="">` : `<div style="width:40px;height:40px;border-radius:8px;background:#232a4d;display:flex;align-items:center;justify-content:center">🎁</div>`}
       <div class="info">
         <div class="name">${p.name || p.template_id}</div>
-        <div class="meta">${p.collection_name || ""} · tpl ${p.template_id}${p.video ? " · 🎬" : ""}${p.back_image ? " · 🔄" : ""}</div>
+        <div class="meta">${p.collection_name || ""} · tpl ${p.template_id}${p.distribution === "mint" ? " · 🏭 mint" : " · 📦 vault"}${p.video ? " · 🎬" : ""}${p.back_image ? " · 🔄" : ""}</div>
       </div>`;
+    const dist = document.createElement("button");
+    dist.className = "danger";
+    dist.style.cssText = p.distribution === "mint" ? "background:#2f2a1a;color:#ffd88b" : "background:#1a2f4d;color:#7de3ff";
+    dist.textContent = p.distribution === "mint" ? "🏭" : "📦";
+    dist.title = p.distribution === "mint"
+      ? "Mint on demand — click to switch to vault transfers"
+      : "Vault transfer — click to switch to mint on demand";
+    dist.onclick = async () => {
+      const next = p.distribution === "mint" ? "transfer" : "mint";
+      if (next === "mint") {
+        if (!p.schema_name) {
+          const s = await fetchSchemaName(p.collection_name, p.template_id);
+          if (!s) { setMsg("Could not determine the template's schema — cannot enable minting.", false); return; }
+          p.schema_name = s;
+        }
+        warnIfNotAuthorized(p.collection_name);
+      }
+      upsertPool({ ...p, distribution: next });
+    };
     const weight = document.createElement("input");
     weight.type = "number"; weight.value = p.weight; weight.min = 1;
     weight.title = "Rarity weight — higher spawns more often";
@@ -504,7 +537,7 @@ function renderPool(pool) {
       await fetch(`${base}/admin/pool/${p.template_id}`, { method: "DELETE", headers: { "X-Admin-Secret": secret } });
       loadPool();
     };
-    el.append(weight, toggle, del);
+    el.append(dist, weight, toggle, del);
     list.appendChild(el);
   });
 }
@@ -523,10 +556,36 @@ async function upsertPool(entry) {
       video: entry.video,
       weight: entry.weight,
       enabled: Boolean(entry.enabled),
+      distribution: entry.distribution || "transfer",
+      schema_name: entry.schema_name || null,
     }),
   });
   if (!res.ok) setMsg("Pool update failed.", false);
   loadPool();
+}
+
+async function fetchSchemaName(collection, templateId) {
+  try {
+    const res = await fetch(`${ATOMIC_API}/atomicassets/v1/templates/${collection}/${templateId}`);
+    const body = await res.json();
+    return (body.data && body.data.schema && body.data.schema.schema_name) || null;
+  } catch { return null; }
+}
+
+async function warnIfNotAuthorized(collection) {
+  try {
+    const res = await fetch(`${ATOMIC_API}/atomicassets/v1/collections/${collection}`);
+    const auth = ((await res.json()).data || {}).authorized_accounts || [];
+    if (!auth.includes(VAULT_ACCOUNT)) {
+      setMsg(`⚠️ ${VAULT_ACCOUNT} is NOT an authorized minter on "${collection}" — mints will fail until the collection author adds it (AtomicHub → collection settings → Authorized Accounts).`, false);
+    }
+  } catch { /* ignore */ }
+}
+
+function checkMintAuth() {
+  if (!document.getElementById("mintOnDemand").checked) return;
+  const collection = document.getElementById("collection").value.trim();
+  if (collection) warnIfNotAuthorized(collection);
 }
 
 function addToPool(t) {
@@ -540,6 +599,8 @@ function addToPool(t) {
     video: t.video,
     weight: 10,
     enabled: true,
+    distribution: "transfer",
+    schema_name: t.schema,
   });
   setMsg(`${t.name} added to the spawn pool (weight 10).`, true);
 }

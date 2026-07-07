@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS drops (
   source TEXT NOT NULL DEFAULT 'admin',   -- 'admin' | 'spawn' | 'starter'
   reserved_for TEXT,                      -- starter drops are visible only to this account
   expires_at TEXT,                        -- ISO timestamp; NULL = never expires
+  distribution TEXT NOT NULL DEFAULT 'transfer', -- 'transfer' (from vault) | 'mint' (on demand)
+  schema_name TEXT,                       -- required when distribution = 'mint'
   created TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_drops_geo ON drops(lat, lng);
@@ -32,7 +34,9 @@ CREATE TABLE IF NOT EXISTS pool (
   back_image TEXT,
   video TEXT,
   weight INTEGER NOT NULL DEFAULT 10,
-  enabled INTEGER NOT NULL DEFAULT 1
+  enabled INTEGER NOT NULL DEFAULT 1,
+  distribution TEXT NOT NULL DEFAULT 'transfer', -- 'transfer' | 'mint'
+  schema_name TEXT
 );
 
 -- Every successful capture (also powers once-per-player and starter logic).

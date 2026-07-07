@@ -164,12 +164,15 @@ async function pickVaultAsset(templateId) {
   return asset ? asset.asset_id : null;
 }
 
-async function transferTo(env, account, assetId, dropName) {
-  const api = new Api({
+function waxApi(env) {
+  return new Api({
     rpc: new JsonRpc(WAX_RPC, { fetch }),
     signatureProvider: new JsSignatureProvider([env.WAX_PRIVATE_KEY]),
   });
-  return api.transact(
+}
+
+async function transferTo(env, account, assetId, dropName) {
+  return waxApi(env).transact(
     {
       actions: [
         {
@@ -181,6 +184,32 @@ async function transferTo(env, account, assetId, dropName) {
             to: account,
             asset_ids: [assetId],
             memo: `Niftastic capture: ${dropName}`.slice(0, 256),
+          },
+        },
+      ],
+    },
+    { blocksBehind: 3, expireSeconds: 30 }
+  );
+}
+
+// Mint-on-demand: requires VAULT_ACCOUNT to be an authorized minter on the collection.
+async function mintTo(env, account, drop) {
+  return waxApi(env).transact(
+    {
+      actions: [
+        {
+          account: "atomicassets",
+          name: "mintasset",
+          authorization: [{ actor: VAULT_ACCOUNT, permission: "active" }],
+          data: {
+            authorized_minter: VAULT_ACCOUNT,
+            collection_name: drop.collection_name,
+            schema_name: drop.schema_name,
+            template_id: drop.template_id,
+            new_asset_owner: account,
+            immutable_data: [],
+            mutable_data: [],
+            tokens_to_back: [],
           },
         },
       ],
@@ -213,6 +242,8 @@ function dropFromPoolEntry(entry, point, opts = {}) {
     image: entry.image,
     back_image: entry.back_image,
     video: entry.video,
+    distribution: entry.distribution || "transfer",
+    schema_name: entry.schema_name || null,
     lat: point.lat,
     lng: point.lng,
     capture_radius: opts.captureRadius || SPAWN_CAPTURE_RADIUS,
@@ -231,15 +262,16 @@ async function insertDrops(env, drops) {
   const stmt = env.DB.prepare(
     `INSERT INTO drops (id, grp, name, template_id, collection_name, image, back_image, video,
       lat, lng, capture_radius, remaining, captured, rarity, once_per_player, source,
-      reserved_for, expires_at, created)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      reserved_for, expires_at, distribution, schema_name, created)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   );
   await env.DB.batch(
     drops.map((d) =>
       stmt.bind(
         d.id, d.grp, d.name, d.template_id, d.collection_name, d.image, d.back_image, d.video,
         d.lat, d.lng, d.capture_radius, d.remaining, d.captured, d.rarity, d.once_per_player,
-        d.source, d.reserved_for, d.expires_at, d.created
+        d.source, d.reserved_for, d.expires_at, d.distribution || "transfer", d.schema_name || null,
+        d.created
       )
     )
   );
@@ -275,10 +307,12 @@ async function maybeSpawn(env, lat, lng, account, nearbyActiveCount) {
   const drops = [];
   for (let i = 0; i < toSpawn; i++) {
     const entry = weightedPick(pool);
-    // Skip templates the vault no longer stocks (best effort).
-    try {
-      if (!(await pickVaultAsset(entry.template_id))) continue;
-    } catch { /* API hiccup — spawn anyway; capture re-checks */ }
+    // Mint-on-demand templates never run dry; vault templates need stock (best effort).
+    if (entry.distribution !== "mint") {
+      try {
+        if (!(await pickVaultAsset(entry.template_id))) continue;
+      } catch { /* API hiccup — spawn anyway; capture re-checks */ }
+    }
     drops.push(dropFromPoolEntry(entry, randomPointNear(lat, lng, SPAWN_MIN_M, SPAWN_MAX_M)));
   }
   if (drops.length) await insertDrops(env, drops);
@@ -303,16 +337,21 @@ async function maybeStarter(env, lat, lng, account) {
   ).bind(account, now).first();
   if (existing) return 0;
 
+  // Prefer mint-on-demand templates for starters — they can never be out of stock,
+  // so every new player is guaranteed a first find.
   const pool = (
-    await env.DB.prepare("SELECT * FROM pool WHERE enabled = 1 ORDER BY weight DESC LIMIT 3").all()
+    await env.DB.prepare(
+      "SELECT * FROM pool WHERE enabled = 1 ORDER BY (distribution = 'mint') DESC, weight DESC LIMIT 5"
+    ).all()
   ).results;
   if (!pool.length) return 0;
 
-  // Most common template with actual vault stock.
   for (const entry of pool) {
-    try {
-      if (!(await pickVaultAsset(entry.template_id))) continue;
-    } catch { /* try it anyway */ }
+    if (entry.distribution !== "mint") {
+      try {
+        if (!(await pickVaultAsset(entry.template_id))) continue;
+      } catch { /* try it anyway */ }
+    }
     const drop = dropFromPoolEntry(entry, randomPointNear(lat, lng, STARTER_MIN_M, STARTER_MAX_M), {
       source: "starter",
       reservedFor: account,
@@ -398,15 +437,19 @@ async function handleCapture(request, env) {
     return json({ error: "already captured", template_id: drop.template_id }, 409);
   }
 
-  let assetId;
-  try {
-    assetId = await pickVaultAsset(drop.template_id);
-  } catch (err) {
-    return json({ error: "vault lookup failed", detail: String(err.message || err) }, 502);
-  }
-  if (!assetId) {
-    await env.DB.prepare("UPDATE drops SET remaining = 0 WHERE id = ?").bind(dropId).run();
-    return json({ error: "drop exhausted" }, 410);
+  const isMint = drop.distribution === "mint";
+
+  let assetId = null;
+  if (!isMint) {
+    try {
+      assetId = await pickVaultAsset(drop.template_id);
+    } catch (err) {
+      return json({ error: "vault lookup failed", detail: String(err.message || err) }, 502);
+    }
+    if (!assetId) {
+      await env.DB.prepare("UPDATE drops SET remaining = 0 WHERE id = ?").bind(dropId).run();
+      return json({ error: "drop exhausted" }, 410);
+    }
   }
 
   // Claim stock BEFORE transferring so two simultaneous captures can't both win.
@@ -417,13 +460,15 @@ async function handleCapture(request, env) {
 
   let result;
   try {
-    result = await transferTo(env, account, assetId, drop.name);
+    result = isMint
+      ? await mintTo(env, account, drop)
+      : await transferTo(env, account, assetId, drop.name);
   } catch (err) {
     // Give the stock back on failure.
     await env.DB.prepare(
       "UPDATE drops SET remaining = remaining + 1, captured = captured - 1 WHERE id = ?"
     ).bind(dropId).run();
-    return json({ error: "transfer failed", detail: String(err.message || err) }, 502);
+    return json({ error: isMint ? "mint failed" : "transfer failed", detail: String(err.message || err) }, 502);
   }
 
   await env.DB.prepare(
@@ -464,11 +509,14 @@ async function handleAdmin(request, url, env) {
       }
       const {
         name, template_id, collection_name, image, back_image, video, lat, lng,
-        captureRadius, quantity, rarity, oncePerPlayer, scatter,
+        captureRadius, quantity, rarity, oncePerPlayer, scatter, distribution, schema_name,
       } = body || {};
       if (!name || !template_id) return json({ error: "name and template_id required" }, 400);
       if (typeof lat !== "number" || typeof lng !== "number") {
         return json({ error: "lat and lng are required numbers" }, 400);
+      }
+      if (distribution === "mint" && (!collection_name || !schema_name)) {
+        return json({ error: "mint drops require collection_name and schema_name" }, 400);
       }
 
       const qty = Math.max(1, Number(quantity) || 1);
@@ -494,6 +542,8 @@ async function handleAdmin(request, url, env) {
         source: "admin",
         reserved_for: null,
         expires_at: null,
+        distribution: distribution === "mint" ? "mint" : "transfer",
+        schema_name: schema_name || null,
         created: new Date().toISOString(),
       });
 
@@ -527,19 +577,26 @@ async function handleAdmin(request, url, env) {
       } catch {
         return json({ error: "invalid JSON body" }, 400);
       }
-      const { template_id, collection_name, name, image, back_image, video, weight, enabled } = body || {};
+      const { template_id, collection_name, name, image, back_image, video, weight, enabled,
+        distribution, schema_name } = body || {};
       if (!template_id) return json({ error: "template_id required" }, 400);
+      if (distribution === "mint" && (!collection_name || !schema_name)) {
+        return json({ error: "mint entries require collection_name and schema_name" }, 400);
+      }
       await env.DB.prepare(
-        `INSERT INTO pool (template_id, collection_name, name, image, back_image, video, weight, enabled)
-         VALUES (?,?,?,?,?,?,?,?)
+        `INSERT INTO pool (template_id, collection_name, name, image, back_image, video, weight, enabled,
+           distribution, schema_name)
+         VALUES (?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(template_id) DO UPDATE SET
            collection_name=excluded.collection_name, name=excluded.name, image=excluded.image,
            back_image=excluded.back_image, video=excluded.video,
-           weight=excluded.weight, enabled=excluded.enabled`
+           weight=excluded.weight, enabled=excluded.enabled,
+           distribution=excluded.distribution, schema_name=excluded.schema_name`
       ).bind(
         String(template_id), collection_name || null, name || null, image || null,
         back_image || null, video || null,
-        Math.max(1, Number(weight) || 10), enabled === false ? 0 : 1
+        Math.max(1, Number(weight) || 10), enabled === false ? 0 : 1,
+        distribution === "mint" ? "mint" : "transfer", schema_name || null
       ).run();
       return json({ ok: true }, 201);
     }
