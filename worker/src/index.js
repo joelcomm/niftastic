@@ -607,6 +607,148 @@ async function maybeGuaranteed(env, lat, lng, account) {
 }
 
 /* ============================================================
+   The Forge — burn coins, receive a vault NFT.
+   Players sign atomicassets::burnasset themselves in-app; the worker
+   verifies on-chain that each submitted asset is a coin burned by that
+   account, marks the coins redeemed (PK blocks double-spend), then
+   transfers a random reward from the vault.
+   ============================================================ */
+
+async function getConfig(env, key, fallback = null) {
+  const row = await env.DB.prepare("SELECT v FROM config WHERE k = ?").bind(key).first();
+  return row && row.v !== "" ? row.v : fallback;
+}
+
+async function handleForgeStatus(url, env) {
+  const account = url.searchParams.get("account");
+  const coinTemplate = await getConfig(env, "coin_template_id");
+  const cost = parseInt(await getConfig(env, "forge_cost_coins", "10"), 10);
+  if (!coinTemplate) return json({ enabled: false, cost });
+
+  let coins = [];
+  if (isValidWaxAccount(account)) {
+    try {
+      const res = await fetch(
+        `${ATOMIC_API}/atomicassets/v1/assets?owner=${account}&template_id=${coinTemplate}&limit=100`
+      );
+      if (res.ok) coins = (((await res.json()).data) || []).map((a) => a.asset_id);
+    } catch { /* count unavailable — client shows unknown */ }
+  }
+  return json({ enabled: true, coin_template_id: coinTemplate, cost, coins });
+}
+
+async function handleForge(request, env) {
+  if (request.headers.get("X-Api-Secret") !== env.API_SECRET) {
+    return json({ error: "unauthorized" }, 401);
+  }
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+  const { account, asset_ids } = body || {};
+  if (!isValidWaxAccount(account) || account === VAULT_ACCOUNT) {
+    return json({ error: "invalid WAX account" }, 400);
+  }
+
+  const coinTemplate = await getConfig(env, "coin_template_id");
+  const cost = parseInt(await getConfig(env, "forge_cost_coins", "10"), 10);
+  if (!coinTemplate) return json({ error: "the forge is not open yet" }, 503);
+  if (!Array.isArray(asset_ids) || asset_ids.length !== cost) {
+    return json({ error: `exactly ${cost} coin asset ids required` }, 400);
+  }
+  const ids = asset_ids.map(String);
+  if (new Set(ids).size !== ids.length) return json({ error: "duplicate asset ids" }, 400);
+  if (ids.some((id) => !/^\d{1,20}$/.test(id))) return json({ error: "invalid asset id" }, 400);
+
+  const rlKey = "forge:" + account;
+  const last = rateLimit.get(rlKey);
+  if (last && Date.now() - last < RATE_WINDOW_MS) {
+    return json({ error: "too many attempts, slow down" }, 429);
+  }
+  rateLimit.set(rlKey, Date.now());
+
+  // Verify on-chain: every submitted asset is a coin that THIS account burned.
+  for (const id of ids) {
+    let a;
+    try {
+      const res = await fetch(`${ATOMIC_API}/atomicassets/v1/assets/${id}`);
+      if (!res.ok) return json({ error: `asset ${id} not found` }, 400);
+      a = (await res.json()).data;
+    } catch {
+      return json({ error: "burn verification unavailable, try again shortly" }, 502);
+    }
+    if (!a || String((a.template || {}).template_id) !== String(coinTemplate)) {
+      return json({ error: `asset ${id} is not a coin` }, 400);
+    }
+    if (a.burned_by_account !== account) {
+      return json({ error: `asset ${id} is not burned yet`, retryable: true }, 409);
+    }
+  }
+
+  // Claim the coins BEFORE rewarding — the primary key makes double-spending impossible.
+  const now = new Date().toISOString();
+  try {
+    await env.DB.batch(
+      ids.map((id) =>
+        env.DB.prepare(
+          "INSERT INTO forge_redemptions (asset_id, account, created) VALUES (?,?,?)"
+        ).bind(id, account, now)
+      )
+    );
+  } catch {
+    return json({ error: "one or more coins were already redeemed" }, 409);
+  }
+
+  const rollback = () =>
+    env.DB.prepare(
+      `DELETE FROM forge_redemptions WHERE asset_id IN (${ids.map(() => "?").join(",")})`
+    ).bind(...ids).run();
+
+  // Reward: a random NFT from the vault (never Niftastic's own coin/badge templates).
+  let reward;
+  try {
+    const res = await fetch(`${ATOMIC_API}/atomicassets/v1/assets?owner=${VAULT_ACCOUNT}&limit=500`);
+    const assets = (((await res.json()).data) || []).filter(
+      (a) => a.collection.collection_name !== "niftasticnft"
+    );
+    if (!assets.length) throw new Error("the vault is empty");
+    reward = assets[Math.floor(Math.random() * assets.length)];
+  } catch (err) {
+    await rollback();
+    return json({ error: "reward selection failed", detail: String(err.message || err) }, 502);
+  }
+
+  let result;
+  try {
+    result = await transferTo(env, account, reward.asset_id, "Forge reward");
+  } catch (err) {
+    await rollback();
+    return json({ error: "reward transfer failed", detail: String(err.message || err) }, 502);
+  }
+
+  await env.DB.prepare(
+    `UPDATE forge_redemptions SET reward_asset_id = ?, reward_tx = ? WHERE asset_id IN (${ids.map(() => "?").join(",")})`
+  ).bind(reward.asset_id, result.transaction_id, ...ids).run();
+
+  const d = reward.data || {};
+  return json({
+    ok: true,
+    transaction_id: result.transaction_id,
+    reward: {
+      asset_id: reward.asset_id,
+      name: d.name || "Mystery NFT",
+      image: d.img || null,
+      backImage: d.backimg || null,
+      video: d.video || null,
+      collection: reward.collection.collection_name,
+      mint: reward.template_mint || null,
+    },
+  });
+}
+
+/* ============================================================
    Handlers
    ============================================================ */
 
@@ -756,6 +898,33 @@ async function handleAdmin(request, url, env) {
 
   const parts = url.pathname.split("/").filter(Boolean); // ["admin", resource, maybe id]
   const resource = parts[1];
+
+  if (resource === "config") {
+    if (request.method === "GET") {
+      const rows = (await env.DB.prepare("SELECT k, v FROM config").all()).results;
+      return json({ config: Object.fromEntries(rows.map((r) => [r.k, r.v])) });
+    }
+    if (request.method === "POST") {
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return json({ error: "invalid JSON body" }, 400);
+      }
+      const entries = Object.entries(body || {}).filter(([k]) =>
+        ["coin_template_id", "forge_cost_coins"].includes(k)
+      );
+      if (!entries.length) return json({ error: "no valid config keys" }, 400);
+      await env.DB.batch(
+        entries.map(([k, v]) =>
+          env.DB.prepare(
+            "INSERT INTO config (k, v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v"
+          ).bind(k, String(v ?? ""))
+        )
+      );
+      return json({ ok: true });
+    }
+  }
 
   if (resource === "fraud" && request.method === "GET") {
     const rows = (
@@ -921,6 +1090,12 @@ export default {
     }
     if (url.pathname === "/capture" && request.method === "POST") {
       return handleCapture(request, env);
+    }
+    if (url.pathname === "/forge" && request.method === "GET") {
+      return handleForgeStatus(url, env);
+    }
+    if (url.pathname === "/forge" && request.method === "POST") {
+      return handleForge(request, env);
     }
     if (url.pathname.startsWith("/admin/")) {
       return handleAdmin(request, url, env);

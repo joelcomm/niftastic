@@ -57,6 +57,18 @@ CREATE TABLE IF NOT EXISTS captures (
 );
 CREATE INDEX IF NOT EXISTS idx_captures_account ON captures(account);
 
+-- Runtime configuration (e.g. coin_template_id, forge_cost_coins).
+CREATE TABLE IF NOT EXISTS config (k TEXT PRIMARY KEY, v TEXT);
+
+-- Burned coins that have been redeemed at the Forge (PK prevents double-spend).
+CREATE TABLE IF NOT EXISTS forge_redemptions (
+  asset_id TEXT PRIMARY KEY,
+  account TEXT NOT NULL,
+  reward_asset_id TEXT,
+  reward_tx TEXT,
+  created TEXT NOT NULL
+);
+
 -- Fraud signals for review (impossible travel etc.).
 CREATE TABLE IF NOT EXISTS fraud_flags (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

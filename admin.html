@@ -129,6 +129,17 @@
       globally, 5 per player, one per km²-cell per hour; spawns expire after 48 h.</div>
     <div id="poolList"></div>
     <hr />
+    <h2>🔥 Forge</h2>
+    <div class="hint">Players burn coins in the app to receive a random vault NFT.
+      The forge stays closed until a coin template ID is set here.</div>
+    <div class="row">
+      <div class="field"><label>Coin template ID</label>
+        <input id="cfgCoinTemplate" placeholder="e.g. 907200" /></div>
+      <div class="field"><label>Cost (coins per forge)</label>
+        <input id="cfgForgeCost" type="number" value="10" min="1" /></div>
+    </div>
+    <button class="primary" onclick="saveConfig()">Save Forge Settings</button>
+    <hr />
     <h2>Active Drops (<span id="count">0</span>)</h2>
     <div id="dropList"></div>
   </aside>
@@ -219,6 +230,7 @@ async function connect() {
     setMsg("Connected — " + body.drops.length + " drops loaded.", true);
     renderDrops(body.drops);
     loadPool();
+    loadConfig();
     updateCreateBtn();
   } catch (e) {
     setMsg("Could not reach the worker: " + e.message, false);
@@ -595,6 +607,33 @@ function checkMintAuth() {
   if (!document.getElementById("mintOnDemand").checked) return;
   const collection = document.getElementById("collection").value.trim();
   if (collection) warnIfNotAuthorized(collection);
+}
+
+/* ---------- Forge config ---------- */
+async function loadConfig() {
+  const { base, secret } = cfg();
+  const res = await fetch(base + "/admin/config", { headers: { "X-Admin-Secret": secret } });
+  if (!res.ok) return;
+  const c = (await res.json()).config || {};
+  if (c.coin_template_id) document.getElementById("cfgCoinTemplate").value = c.coin_template_id;
+  if (c.forge_cost_coins) document.getElementById("cfgForgeCost").value = c.forge_cost_coins;
+}
+
+async function saveConfig() {
+  const { base, secret } = cfg();
+  const res = await fetch(base + "/admin/config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Admin-Secret": secret },
+    body: JSON.stringify({
+      coin_template_id: document.getElementById("cfgCoinTemplate").value.trim(),
+      forge_cost_coins: document.getElementById("cfgForgeCost").value.trim() || "10",
+    }),
+  });
+  setMsg(res.ok
+    ? (document.getElementById("cfgCoinTemplate").value.trim()
+        ? "Forge settings saved — the forge is OPEN."
+        : "Forge settings saved — forge stays closed until a coin template is set.")
+    : "Saving forge settings failed.", res.ok);
 }
 
 function addToPool(t) {

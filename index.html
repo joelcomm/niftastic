@@ -157,6 +157,20 @@
   .inv-card .mint { padding: 0 10px 10px; font-size: 11.5px; color: #9aa3c7; }
   .empty { text-align: center; color: #6b7399; padding: 48px 24px; line-height: 1.6; }
 
+  /* ---------- Forge ---------- */
+  .forge { padding: 28px 20px; text-align: center; display: flex; flex-direction: column;
+    align-items: center; gap: 14px; }
+  .forge h2 { font-size: 22px; }
+  .forge .count { font-size: 15px; color: #9aa3c7; }
+  .forge .count b { color: #ffd88b; font-size: 18px; }
+  .forge-btn {
+    border: none; border-radius: 16px; padding: 18px 34px; font-size: 17px; font-weight: 800;
+    background: linear-gradient(90deg, #ffd88b, #ff8bd2); color: #0b0f1e; cursor: pointer;
+    box-shadow: 0 8px 28px rgba(255,216,139,.35);
+  }
+  .forge-btn:disabled { background: #232a4d; color: #6b7399; box-shadow: none; }
+  .forge .busy { color: #7de3ff; font-size: 14px; font-weight: 600; min-height: 20px; }
+
   /* ---------- Capture modal ---------- */
   .modal-bg { position: fixed; inset: 0; background: rgba(4,6,15,.85); z-index: 40;
     display: flex; align-items: center; justify-content: center; padding: 28px; }
@@ -659,10 +673,154 @@ function Inventory({ account, refreshKey }) {
 }
 
 /* ============================================================
+   The Forge — burn coins for a vault NFT
+   ============================================================ */
+const PENDING_FORGE_KEY = "niftasticPendingForge";
+
+function Forge({ account, wax, onForged }) {
+  const [status, setStatus] = React.useState(null);
+  const [coinMeta, setCoinMeta] = React.useState(null);
+  const [busy, setBusy] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [result, setResult] = React.useState(null);
+
+  const load = React.useCallback(async () => {
+    try {
+      const res = await fetch(`${WAX_CONFIG.workerBase}/forge?account=${account}`);
+      const body = await res.json();
+      setStatus(body);
+      if (body.enabled && body.coin_template_id && !coinMeta) {
+        for (const base of WAX_CONFIG.atomicApiBases) {
+          try {
+            const tRes = await fetch(`${base}/atomicassets/v1/templates?ids=${body.coin_template_id}&limit=1`);
+            if (!tRes.ok) continue;
+            const t = ((await tRes.json()).data || [])[0];
+            if (t) setCoinMeta({
+              name: t.immutable_data.name || "Niftastic Coin",
+              image: t.immutable_data.img,
+              backImage: t.immutable_data.backimg,
+              video: t.immutable_data.video,
+            });
+            break;
+          } catch { /* try next API */ }
+        }
+      }
+    } catch {
+      setError("Could not reach the forge — try again shortly.");
+    }
+  }, [account]);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const redeem = async (ids) => {
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      setBusy(attempt === 1 ? "Coins burned — forging…" : `Forging… (attempt ${attempt})`);
+      await new Promise(r => setTimeout(r, attempt === 1 ? 2500 : 3500));
+      const res = await fetch(`${WAX_CONFIG.workerBase}/forge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Api-Secret": WAX_CONFIG.apiSecret },
+        body: JSON.stringify({ account, asset_ids: ids }),
+      });
+      const body = await res.json();
+      if (res.ok) {
+        localStorage.removeItem(PENDING_FORGE_KEY);
+        setResult(body);
+        onForged();
+        load();
+        return;
+      }
+      if (!body.retryable) {
+        localStorage.removeItem(PENDING_FORGE_KEY);
+        throw new Error(body.error || "Forge failed");
+      }
+    }
+    throw new Error("The blockchain is being slow — your burn is safe. Tap the button again in a minute to claim your reward.");
+  };
+
+  // If a previous burn never got redeemed (page closed, network drop), resume it.
+  React.useEffect(() => {
+    const pending = localStorage.getItem(PENDING_FORGE_KEY);
+    if (!pending) return;
+    (async () => {
+      try { await redeem(JSON.parse(pending)); }
+      catch (e) { setError(e.message); }
+      finally { setBusy(null); }
+    })();
+  }, []);
+
+  const forge = async () => {
+    if (!status || busy) return;
+    setError(null);
+    const ids = status.coins.slice(0, status.cost);
+    try {
+      setBusy("Confirm the burn in your wallet…");
+      await wax.api.transact(
+        {
+          actions: ids.map(id => ({
+            account: "atomicassets",
+            name: "burnasset",
+            authorization: [{ actor: account, permission: "active" }],
+            data: { asset_owner: account, asset_id: id },
+          })),
+        },
+        { blocksBehind: 3, expireSeconds: 90 }
+      );
+      localStorage.setItem(PENDING_FORGE_KEY, JSON.stringify(ids));
+      await redeem(ids);
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (!status) return <div className="empty"><div className="spinner" />Stoking the forge…</div>;
+  if (!status.enabled) return (
+    <div className="forge">
+      <div style={{ fontSize: 64 }}>🔥</div>
+      <h2>The Forge is warming up</h2>
+      <div className="count">Coming very soon — start collecting so you're ready.</div>
+    </div>
+  );
+
+  const have = status.coins.length;
+  const enough = have >= status.cost;
+  return (
+    <div className="forge">
+      {coinMeta && <SpinCard image={coinMeta.image} backImage={coinMeta.backImage}
+        video={coinMeta.video} size={120} speed={4} />}
+      <h2>The Forge</h2>
+      <div className="count">
+        You have <b>{have}{have >= 100 ? "+" : ""}</b> coin{have === 1 ? "" : "s"} · burn{" "}
+        <b>{status.cost}</b> to forge a mystery NFT from the vault
+      </div>
+      <button className="forge-btn" disabled={!enough || Boolean(busy)} onClick={forge}>
+        {busy ? "Forging…" : enough ? `🔥 Burn ${status.cost} coins` : `Collect ${status.cost - have} more coin${status.cost - have === 1 ? "" : "s"}`}
+      </button>
+      <div className="busy">{busy || ""}</div>
+      {error && <div className="err">{error}</div>}
+
+      {result && (
+        <div className="modal-bg" onClick={() => setResult(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <SpinCard image={result.reward.image} backImage={result.reward.backImage}
+              video={result.reward.video} size={140} speed={3} />
+            <h2>⚒️ Forged!</h2>
+            <p><b>{result.reward.name}</b>{result.reward.mint ? ` (mint #${result.reward.mint})` : ""} is yours — transferred from the vault.</p>
+            <p style={{ fontSize: 11 }}>tx: {result.transaction_id}</p>
+            <button className="btn" onClick={() => setResult(null)}>Amazing!</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
    App
    ============================================================ */
 function App() {
-  const { account, error: waxError, ready, login } = useWax();
+  const { wax, account, error: waxError, ready, login } = useWax();
   const { pos, geoError } = useGeolocation();
   const { drops, fetchError, spawnNotice } = useDrops(account ? pos : null, account);
   const { heading } = useCompass(Boolean(account));
@@ -780,6 +938,7 @@ function App() {
             })}
           </div>
         )}
+        {tab === "forge" && <Forge account={account} wax={wax} onForged={() => setInvKey(k => k + 1)} />}
         {tab === "inventory" && <Inventory account={account} refreshKey={invKey} />}
       </div>
 
@@ -789,6 +948,7 @@ function App() {
 
       <div className="tabs">
         <div className={"tab" + (tab === "hunt" ? " active" : "")} onClick={() => setTab("hunt")}>🗺️ Hunt</div>
+        <div className={"tab" + (tab === "forge" ? " active" : "")} onClick={() => setTab("forge")}>🔥 Forge</div>
         <div className={"tab" + (tab === "inventory" ? " active" : "")} onClick={() => setTab("inventory")}>🎒 Inventory</div>
       </div>
 
